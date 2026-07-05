@@ -1,0 +1,8 @@
+/target/
+.pnpm-store/
+node_modules/
+dist/
+/tmp/
+*.db
+*.db-shm
+*.db-wal

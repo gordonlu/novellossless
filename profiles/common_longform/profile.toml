@@ -1,0 +1,9 @@
+id = "common_longform"
+name = "通用长篇"
+version = "0.1.0"
+
+[rules]
+chapter_recognition = true
+full_text_search = true
+evidence_required = true
+auto_modify_source = false
