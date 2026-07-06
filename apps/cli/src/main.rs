@@ -28,6 +28,10 @@ enum Command {
         #[arg(long)]
         project_id: String,
     },
+    IncrementalScan {
+        #[arg(long)]
+        project_id: String,
+    },
     Search {
         #[arg(long)]
         project_id: String,
@@ -95,6 +99,16 @@ fn main() -> Result<()> {
                 report.analysis.foreshadow_candidates
             );
             println!("issue_count={}", report.analysis.issue_count);
+        }
+        Command::IncrementalScan { project_id } => {
+            let report = core.incremental_scan(&project_id)?;
+            println!("增量扫描完成：");
+            println!("  已扫描: {}", report.scanned_documents);
+            println!("  新建: {}", report.created);
+            println!("  修改: {}", report.modified);
+            println!("  未变: {}", report.unchanged);
+            println!("  删除: {}", report.deleted);
+            println!("  失败: {}", report.failed);
         }
         Command::Search {
             project_id,
