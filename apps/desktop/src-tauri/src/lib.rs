@@ -10,6 +10,8 @@ use novellossless_storage::{
 use serde::Serialize;
 use tauri::Manager;
 
+mod watcher;
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProjectDto {
