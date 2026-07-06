@@ -1,5 +1,6 @@
 use super::extractor::{ChunkInfo, Extraction, Extractor, ForeshadowCandidate};
-use std::collections::BTreeSet;
+use regex::Regex;
+use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub struct ForeshadowExtractor;
@@ -23,8 +24,7 @@ impl Extractor for ForeshadowExtractor {
             "信物",
             "谜",
         ];
-        let mut items = Vec::new();
-        let mut seen = BTreeSet::new();
+        let mut seen: BTreeMap<String, ForeshadowAccumulator> = BTreeMap::new();
 
         for chunk in chunks {
             for sentence in split_sentences(&chunk.content) {
@@ -32,23 +32,70 @@ impl Extractor for ForeshadowExtractor {
                     continue;
                 }
                 let title = sentence.chars().take(28).collect::<String>();
-                let key = format!("{}:{}", chunk.chunk_id, title);
-                if !seen.insert(key) {
-                    continue;
+
+                seen.entry(title.clone())
+                    .or_insert_with(|| ForeshadowAccumulator {
+                        first_chunk: chunk.clone(),
+                        latest_chunk: chunk.clone(),
+                        mention_count: 0,
+                        related_names: Vec::new(),
+                    });
+
+                if let Some(acc) = seen.get_mut(&title) {
+                    acc.latest_chunk = chunk.clone();
+                    acc.mention_count += 1;
+
+                    let name_pattern = Regex::new(r"([\p{Han}]{2,4})").unwrap();
+                    for cap in name_pattern.captures_iter(&sentence) {
+                        let n = cap.get(1).unwrap().as_str().to_string();
+                        if n.chars().count() >= 2 {
+                            acc.related_names.push(n);
+                        }
+                    }
                 }
-                items.push(Extraction::Foreshadow(ForeshadowCandidate {
-                    title,
-                    foreshadow_type: "explicit_clue".to_string(),
-                    first_chunk_id: chunk.chunk_id.clone(),
-                    latest_chunk_id: chunk.chunk_id.clone(),
-                    risk_level: "medium".to_string(),
-                    evidence: sentence.chars().take(120).collect(),
-                    related_nodes: Vec::new(),
-                }));
             }
         }
 
-        items
+        seen.into_iter()
+            .map(|(title, acc)| {
+                let gap = acc.latest_chunk.chunk_index - acc.first_chunk.chunk_index;
+                let risk = calculate_risk(gap, acc.mention_count);
+                let mut related: Vec<String> = acc.related_names;
+                related.sort();
+                related.dedup();
+
+                Extraction::Foreshadow(ForeshadowCandidate {
+                    title,
+                    foreshadow_type: "explicit_clue".to_string(),
+                    first_chunk_id: acc.first_chunk.chunk_id.clone(),
+                    latest_chunk_id: acc.latest_chunk.chunk_id.clone(),
+                    risk_level: risk.to_string(),
+                    evidence: acc.first_chunk.content.chars().take(120).collect(),
+                    related_nodes: related,
+                })
+            })
+            .collect()
+    }
+}
+
+struct ForeshadowAccumulator {
+    first_chunk: ChunkInfo,
+    latest_chunk: ChunkInfo,
+    mention_count: i64,
+    related_names: Vec<String>,
+}
+
+fn calculate_risk(chapter_gap: i64, mention_count: i64) -> &'static str {
+    let score = chapter_gap
+        .saturating_abs()
+        .saturating_mul(2)
+        .saturating_mul(mention_count);
+    if score >= 20 {
+        "high"
+    } else if score >= 10 {
+        "medium"
+    } else {
+        "low"
     }
 }
 

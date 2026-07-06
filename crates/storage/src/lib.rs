@@ -101,6 +101,7 @@ pub struct NewForeshadowItem {
     pub latest_chunk_id: String,
     pub risk_level: String,
     pub evidence: String,
+    pub related_nodes_json: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -660,13 +661,14 @@ impl Storage {
                 r#"
                 INSERT INTO foreshadow_items (
                     id, project_id, title, foreshadow_type, first_chunk_id, latest_chunk_id,
-                    risk_level, evidence, created_at, updated_at
+                    risk_level, evidence, related_nodes_json, created_at, updated_at
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
                 ON CONFLICT(project_id, title, first_chunk_id) DO UPDATE SET
                     latest_chunk_id = excluded.latest_chunk_id,
                     risk_level = excluded.risk_level,
                     evidence = excluded.evidence,
+                    related_nodes_json = excluded.related_nodes_json,
                     updated_at = excluded.updated_at
                 "#,
                 params![
@@ -678,6 +680,7 @@ impl Storage {
                     item.latest_chunk_id,
                     item.risk_level,
                     item.evidence,
+                    item.related_nodes_json,
                     Utc::now().to_rfc3339()
                 ],
             )?;

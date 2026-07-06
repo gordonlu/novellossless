@@ -411,6 +411,8 @@ impl NovelCore {
                         latest_chunk_id: f.latest_chunk_id,
                         risk_level: f.risk_level,
                         evidence: f.evidence,
+                        related_nodes_json: serde_json::to_string(&f.related_nodes)
+                            .unwrap_or_default(),
                     }),
                     Extraction::Issue(iss) => issues.push(NewContinuityIssue {
                         issue_type: iss.issue_type,
