@@ -2,8 +2,6 @@ import {
   AlertTriangle,
   Archive,
   CheckCircle2,
-  ChevronRight,
-  FileSearch,
   FolderOpen,
   Network,
   Plus,
@@ -11,17 +9,14 @@ import {
   Search,
   UserRound,
 } from "lucide-react";
-import { clsx } from "clsx";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { InspectorPanel } from "../components/InspectorPanel";
 import { StatusButtons } from "../components/StatusButtons";
 import {
   candidateTypeLabel,
   formatError,
-  renderSnippet,
   riskLabel,
   severityLabel,
-  sourceLabel,
   totalCandidateCount,
 } from "../lib/helpers";
 import type {
@@ -33,7 +28,6 @@ import type {
   PrivacyStatus,
   ProfileInfo,
   ScanReport,
-  SearchHit,
 } from "../tauri";
 
 type BusyState = "idle" | "loading" | "import" | "scan" | "search" | "context";
@@ -47,13 +41,7 @@ interface DashboardProps {
   candidates: NarrativeNode[];
   foreshadows: ForeshadowItem[];
   issues: ContinuityIssue[];
-  query: string;
-  setQuery: (q: string) => void;
-  hits: SearchHit[];
-  selectedHit: SearchHit | null;
-  setSelectedHit: (hit: SearchHit | null) => void;
   contextPack: ContextPack | null;
-  searchAttempted: boolean;
   lastScan: ScanReport | null;
   busy: BusyState;
   runtimeMode: string;
@@ -64,10 +52,8 @@ interface DashboardProps {
   chooseFolder: () => void;
   handleImport: () => void;
   handleScan: () => void;
-  runSearch: (query?: string) => void;
-  handleBuildContextPack: () => void;
+  handleBuildContextPack: (query: string) => void;
   handleStatus: (kind: "candidate" | "foreshadow" | "issue", id: string, status: string) => void;
-  revealSelectedSource: () => void;
 }
 
 export function Dashboard(props: DashboardProps) {
@@ -80,13 +66,7 @@ export function Dashboard(props: DashboardProps) {
     candidates,
     foreshadows,
     issues,
-    query,
-    setQuery,
-    hits,
-    selectedHit,
-    setSelectedHit,
     contextPack,
-    searchAttempted,
     lastScan,
     busy,
     runtimeMode,
@@ -97,11 +77,11 @@ export function Dashboard(props: DashboardProps) {
     chooseFolder,
     handleImport,
     handleScan,
-    runSearch,
     handleBuildContextPack,
     handleStatus,
-    revealSelectedSource,
   } = props;
+
+  const [contextQuery, setContextQuery] = useState("");
 
   const metrics = useMemo(
     () => [
@@ -193,65 +173,6 @@ export function Dashboard(props: DashboardProps) {
               </strong>
             </div>
           ))}
-        </section>
-
-        <section className="panel search-panel">
-          <div className="panel-heading compact">
-            <div>
-              <h2>全文搜索</h2>
-              <p>搜索正文片段，并保留可回溯的章节证据。</p>
-            </div>
-            <FileSearch size={22} />
-          </div>
-
-          <div className="search-row">
-            <Search size={18} />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  runSearch();
-                }
-              }}
-              placeholder="输入人物、物件、地点或句子"
-            />
-            <button type="button" onClick={() => runSearch()} disabled={busy !== "idle"}>
-              {busy === "search" ? "搜索中" : "搜索"}
-            </button>
-          </div>
-
-          <div className="results-list">
-            {hits.length > 0 ? (
-              hits.map((hit) => (
-                <button
-                  type="button"
-                  key={hit.chunkId}
-                  className={clsx(
-                    "result-item",
-                    selectedHit?.chunkId === hit.chunkId && "result-item-active",
-                  )}
-                  onClick={() => setSelectedHit(hit)}
-                >
-                  <div>
-                    <strong>{hit.title}</strong>
-                    <span className="result-meta">{sourceLabel(hit)}</span>
-                    <p>{renderSnippet(hit.snippet)}</p>
-                  </div>
-                  <ChevronRight size={17} />
-                </button>
-              ))
-            ) : (
-              <div className="empty-state">
-                <strong>{searchAttempted ? "没有找到匹配片段" : "等待搜索"}</strong>
-                <p>
-                  {hasRealProject
-                    ? "输入人物、物件、地点或原文句子后，可在右侧查看来源证据。"
-                    : "导入项目后会搜索真实正文；当前仅用于界面预览。"}
-                </p>
-              </div>
-            )}
-          </div>
         </section>
 
         <section className="p0-grid">
@@ -354,27 +275,33 @@ export function Dashboard(props: DashboardProps) {
             <div className="panel-heading compact">
               <div>
                 <h2>上下文包</h2>
-                <p>根据当前搜索词生成 Markdown，所有内容保留来源。</p>
+                <p>输入关键词生成 Markdown 上下文，所有内容保留来源。</p>
               </div>
               <Archive size={22} />
             </div>
-            <button
-              type="button"
-              className="secondary-button strong"
-              onClick={handleBuildContextPack}
-              disabled={busy !== "idle"}
-            >
-              <Archive size={16} />
-              {busy === "context" ? "正在生成" : "生成上下文包"}
-            </button>
+            <div className="search-row">
+              <Search size={18} />
+              <input
+                value={contextQuery}
+                onChange={(e) => setContextQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleBuildContextPack(contextQuery)}
+                placeholder="输入人物、地点或物件名称"
+              />
+              <button
+                type="button"
+                onClick={() => handleBuildContextPack(contextQuery)}
+                disabled={busy !== "idle"}
+              >
+                {busy === "context" ? "正在生成" : "生成"}
+              </button>
+            </div>
             {contextPack && <pre className="context-preview">{contextPack.content}</pre>}
           </section>
         </section>
       </div>
 
       <InspectorPanel
-        selectedHit={selectedHit}
-        onRevealSource={revealSelectedSource}
+        selectedHit={null}
         issuesCount={issues.length}
         privacy={privacy}
         profiles={profiles}

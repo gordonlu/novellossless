@@ -26,13 +26,11 @@ import {
   ProjectSummary,
   scanProject,
   ScanReport,
-  searchProject,
-  SearchHit,
   updateCandidateStatus,
   updateForeshadowStatus,
   updateIssueStatus,
 } from "./tauri";
-import { basename, formatError, plainSnippet } from "./lib/helpers";
+import { basename, formatError } from "./lib/helpers";
 import { ContentView } from "./routes/ContentView";
 import { ContextPack as ContextPackRoute } from "./routes/ContextPack";
 import { Characters } from "./routes/Characters";
@@ -78,29 +76,6 @@ const emptyDashboard: Dashboard = {
   foreshadowCandidates: 0,
   issueCount: 0,
 };
-
-const sampleHits: SearchHit[] = [
-  {
-    documentId: "sample-1",
-    chunkId: "sample-1",
-    documentPath: "001-雨夜.txt",
-    chunkIndex: 0,
-    title: "第一章 雨夜",
-    snippet: "林澈在[雨夜]里醒来，远处旧钟楼传来三声回响。",
-    startOffset: 0,
-    endOffset: 28,
-  },
-  {
-    documentId: "sample-2",
-    chunkId: "sample-2",
-    documentPath: "002-伞下的人.txt",
-    chunkIndex: 0,
-    title: "第二章 伞下的人",
-    snippet: "她说自己从未见过那枚铜钥匙，可[雨夜]的证词并不一致。",
-    startOffset: 0,
-    endOffset: 31,
-  },
-];
 
 const sampleCandidates: NarrativeNode[] = [
   {
@@ -190,16 +165,12 @@ export function App() {
   const [lastScan, setLastScan] = useState<ScanReport | null>(null);
   const [folderPath, setFolderPath] = useState("");
   const [projectName, setProjectName] = useState("");
-  const [query, setQuery] = useState("雨夜");
-  const [hits, setHits] = useState<SearchHit[]>(sampleHits);
-  const [selectedHit, setSelectedHit] = useState<SearchHit | null>(sampleHits[0]);
   const [candidates, setCandidates] = useState<NarrativeNode[]>(sampleCandidates);
   const [foreshadows, setForeshadows] = useState<ForeshadowItem[]>(sampleForeshadows);
   const [issues, setIssues] = useState<ContinuityIssue[]>(sampleIssues);
   const [privacy, setPrivacy] = useState<PrivacyStatus>(previewPrivacy);
   const [profiles, setProfiles] = useState<ProfileInfo[]>(previewProfiles);
   const [contextPack, setContextPack] = useState<ContextPack | null>(null);
-  const [searchAttempted, setSearchAttempted] = useState(false);
   const [busy, setBusy] = useState<BusyState>("loading");
   const [notice, setNotice] = useState("离线模式已开启，正文仅保存在本机。");
   const [error, setError] = useState("");
@@ -279,10 +250,7 @@ export function App() {
     setProjectName(project.name);
     setFolderPath("");
     setLastScan(null);
-    setHits(project.id === "demo" ? sampleHits : []);
-    setSelectedHit(project.id === "demo" ? sampleHits[0] : null);
     setContextPack(null);
-    setSearchAttempted(false);
 
     if (project.id === "demo") {
       applyPreviewData();
@@ -304,8 +272,6 @@ export function App() {
       foreshadowCandidates: sampleForeshadows.length,
       issueCount: sampleIssues.length,
     });
-    setHits(sampleHits);
-    setSelectedHit(sampleHits[0]);
     setCandidates(sampleCandidates);
     setForeshadows(sampleForeshadows);
     setIssues(sampleIssues);
@@ -316,13 +282,10 @@ export function App() {
   function resetToEmptyProject() {
     setSelectedProject(demoProject);
     setDashboard(emptyDashboard);
-    setHits([]);
-    setSelectedHit(null);
     setCandidates([]);
     setForeshadows([]);
     setIssues([]);
     setContextPack(null);
-    setSearchAttempted(false);
   }
 
   async function refreshProjects() {
@@ -381,10 +344,7 @@ export function App() {
       const project = await importProject(projectName.trim() || "新小说项目", folderPath.trim());
       setSelectedProject(project);
       setProjects((items) => [project, ...items.filter((item) => item.id !== project.id)]);
-      setHits([]);
-      setSelectedHit(null);
       setContextPack(null);
-      setSearchAttempted(false);
       await loadProjectP0(project.id);
       setNotice("项目已导入，可以开始本地扫描。");
     } catch (reason) {
@@ -416,7 +376,6 @@ export function App() {
       setNotice(
         `扫描完成：读取 ${report.scannedDocuments} 份文件，跳过 ${report.skippedFiles} 份文件。`,
       );
-      await runSearch(query, selectedProject.id);
     } catch (reason) {
       setError(formatError(reason));
     } finally {
@@ -435,45 +394,8 @@ export function App() {
     setIssues(nextIssues);
   }
 
-  async function runSearch(nextQuery = query, projectId = selectedProject.id) {
-    const trimmedQuery = nextQuery.trim();
-    if (!trimmedQuery) {
-      setError("请输入要搜索的文字。");
-      return;
-    }
-
-    if (!hasRealProject) {
-      const previewHits = sampleHits.filter(
-        (hit) => hit.title.includes(trimmedQuery) || plainSnippet(hit.snippet).includes(trimmedQuery),
-      );
-      setHits(previewHits);
-      setSelectedHit(previewHits[0] ?? null);
-      setSearchAttempted(true);
-      setNotice(
-        previewHits.length > 0
-          ? `预览数据中找到 ${previewHits.length} 条来源片段。`
-          : "预览数据中没有匹配片段。",
-      );
-      return;
-    }
-
-    setBusy("search");
-    setError("");
-    setSearchAttempted(true);
-    try {
-      const results = await searchProject(projectId, trimmedQuery, 20);
-      setHits(results);
-      setSelectedHit(results[0] ?? null);
-      setNotice(results.length > 0 ? `找到 ${results.length} 条来源片段。` : "没有找到匹配片段。");
-    } catch (reason) {
-      setError(formatError(reason));
-    } finally {
-      setBusy("idle");
-    }
-  }
-
-  async function handleBuildContextPack() {
-    const trimmedQuery = query.trim();
+  async function handleBuildContextPack(searchQuery: string) {
+    const trimmedQuery = searchQuery.trim();
     if (!trimmedQuery) {
       setError("请输入上下文包关键词。");
       return;
@@ -539,16 +461,6 @@ export function App() {
     } else {
       setIssues((items) => items.map((item) => (item.id === id ? { ...item, status } : item)));
     }
-  }
-
-  function revealSelectedSource() {
-    if (!selectedHit) {
-      return;
-    }
-
-    setNotice(
-      `来源定位：${selectedHit.documentPath}，第 ${selectedHit.chunkIndex + 1} 段，位置 ${selectedHit.startOffset}-${selectedHit.endOffset}。`,
-    );
   }
 
   return (
@@ -650,13 +562,7 @@ export function App() {
                 candidates={candidates}
                 foreshadows={foreshadows}
                 issues={issues}
-                query={query}
-                setQuery={setQuery}
-                hits={hits}
-                selectedHit={selectedHit}
-                setSelectedHit={setSelectedHit}
                 contextPack={contextPack}
-                searchAttempted={searchAttempted}
                 lastScan={lastScan}
                 busy={busy}
                 runtimeMode={runtimeMode}
@@ -667,15 +573,13 @@ export function App() {
                 chooseFolder={chooseFolder}
                 handleImport={handleImport}
                 handleScan={handleScan}
-                runSearch={runSearch}
                 handleBuildContextPack={handleBuildContextPack}
                 handleStatus={handleStatus}
-                revealSelectedSource={revealSelectedSource}
               />
             }
           />
           <Route path="/content" element={<ContentView projectId={selectedProject.id} />} />
-          <Route path="/search" element={<SearchView />} />
+          <Route path="/search" element={<SearchView projectId={selectedProject.id} />} />
           <Route path="/characters" element={<Characters projectId={selectedProject.id} />} />
           <Route path="/foreshadows" element={<Foreshadows projectId={selectedProject.id} />} />
           <Route path="/timeline" element={<Timeline />} />
