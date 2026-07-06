@@ -72,6 +72,7 @@ pub struct ProjectChunk {
 pub struct NewNarrativeNode {
     pub node_type: String,
     pub name: String,
+    pub aliases_json: String,
     pub occurrence_count: i64,
     pub first_chunk_id: String,
     pub latest_chunk_id: String,
@@ -620,11 +621,12 @@ impl Storage {
             self.conn.execute(
                 r#"
                 INSERT INTO narrative_nodes (
-                    id, project_id, node_type, name, confidence, occurrence_count,
+                    id, project_id, node_type, name, aliases_json, confidence, occurrence_count,
                     first_chunk_id, latest_chunk_id, created_at, updated_at
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
                 ON CONFLICT(project_id, node_type, name) DO UPDATE SET
+                    aliases_json = excluded.aliases_json,
                     confidence = excluded.confidence,
                     occurrence_count = excluded.occurrence_count,
                     latest_chunk_id = excluded.latest_chunk_id,
@@ -635,6 +637,7 @@ impl Storage {
                     project_id,
                     node.node_type,
                     node.name,
+                    node.aliases_json,
                     node.confidence,
                     node.occurrence_count,
                     node.first_chunk_id,

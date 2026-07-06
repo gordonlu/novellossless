@@ -391,6 +391,7 @@ impl NovelCore {
                         let node = NewNarrativeNode {
                             node_type: c.node_type,
                             name: c.name,
+                            aliases_json: serde_json::to_string(&c.aliases).unwrap_or_default(),
                             occurrence_count: c.occurrence_count,
                             first_chunk_id: c.first_chunk_id,
                             latest_chunk_id: c.latest_chunk_id,
@@ -600,5 +601,30 @@ mod tests {
             .expect("context pack");
         assert!(context.content.contains("铜钥匙"));
         assert!(context.content.contains("来源文件"));
+    }
+
+    #[test]
+    fn person_aliases_are_merged() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir).expect("dir");
+        std::fs::write(
+            novel_dir.join("001.txt"),
+            "第一章 雨夜\n林澈说他在雨夜醒来。林兄，你怎么在这里？",
+        )
+        .expect("write");
+
+        let core = NovelCore::from_storage(Storage::open_memory().expect("storage"));
+        let project = core.import_project("test", &novel_dir).expect("import");
+        core.scan_project(&project.id).expect("scan");
+
+        let candidates = core
+            .list_candidates(&project.id, Some("person"), 10)
+            .expect("list");
+        let linche = candidates
+            .iter()
+            .find(|c| c.name == "林澈")
+            .expect("林澈 found");
+        assert!(linche.occurrence_count >= 2);
     }
 }

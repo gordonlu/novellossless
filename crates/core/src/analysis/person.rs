@@ -41,13 +41,17 @@ impl Extractor for PersonExtractor {
             }
         }
 
+        self.merge_aliases(&mut seen, chunks);
+
         seen.into_iter()
             .filter(|(_, acc)| acc.count >= 1)
-            .map(|(name, acc)| {
+            .map(|(name, mut acc)| {
+                acc.aliases.sort();
+                acc.aliases.dedup();
                 Extraction::Candidate(NarrativeNodeCandidate {
                     node_type: "person".to_string(),
                     name,
-                    aliases: Vec::new(),
+                    aliases: acc.aliases,
                     summary: String::new(),
                     occurrence_count: acc.count,
                     first_chunk_id: acc.first_chunk_id,
@@ -66,10 +70,45 @@ struct CandidateAccumulator {
     aliases: Vec<String>,
 }
 
+impl PersonExtractor {
+    fn merge_aliases(
+        &self,
+        seen: &mut BTreeMap<String, CandidateAccumulator>,
+        chunks: &[ChunkInfo],
+    ) {
+        let known_names: Vec<String> = seen.keys().cloned().collect();
+        let alias_pairs: Vec<(String, String)> = known_names
+            .iter()
+            .flat_map(|name| {
+                let mut pairs = Vec::new();
+                if name.chars().count() == 2 {
+                    let first_char: String = name.chars().take(1).collect();
+                    pairs.push((first_char.clone() + "兄", name.clone()));
+                    pairs.push((first_char + "公子", name.clone()));
+                }
+                pairs
+            })
+            .collect();
+
+        for chunk in chunks {
+            for (alias, full_name) in &alias_pairs {
+                if chunk.content.contains(alias.as_str()) {
+                    if let Some(entry) = seen.get_mut(full_name) {
+                        entry.aliases.push(alias.clone());
+                        entry.count += 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn person_patterns() -> Result<Vec<Regex>, regex::Error> {
     vec![
         Regex::new(r"([\p{Han}]{2,4})(?:说|问|道|喊|低声|笑道|看着|走进|转身)"),
         Regex::new(r"(?:向|对|跟)([\p{Han}]{2,4})(?:说|问|道)"),
+        Regex::new(r"([\p{Han}]{1,2}(?:兄|姐|弟|妹|叔|伯|婶|嫂|娘|爷|公|子|生|师|徒|君))"),
+        Regex::new(r#""([\p{Han}]{2,4})[，,]"#),
     ]
     .into_iter()
     .collect()
