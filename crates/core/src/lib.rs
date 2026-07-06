@@ -1,3 +1,4 @@
+mod analysis;
 mod profile;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -833,7 +834,11 @@ fn find_profiles_root() -> PathBuf {
     if let Ok(current_dir) = std::env::current_dir() {
         for ancestor in current_dir.ancestors() {
             let candidate = ancestor.join("profiles");
-            if candidate.join("common_longform").join("profile.toml").exists() {
+            if candidate
+                .join("common_longform")
+                .join("profile.toml")
+                .exists()
+            {
                 return candidate;
             }
         }
