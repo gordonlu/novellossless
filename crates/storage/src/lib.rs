@@ -67,6 +67,7 @@ pub struct ProjectChunk {
     pub start_offset: i64,
     pub end_offset: i64,
     pub word_count: i64,
+    pub content_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -656,7 +657,8 @@ impl Storage {
                 document_chunks.content,
                 document_chunks.start_offset,
                 document_chunks.end_offset,
-                document_chunks.word_count
+                document_chunks.word_count,
+                document_chunks.content_hash
             FROM document_chunks
             JOIN documents ON documents.id = document_chunks.document_id
             WHERE document_chunks.project_id = ?1 AND documents.deleted = 0
@@ -675,6 +677,7 @@ impl Storage {
                 start_offset: row.get(6)?,
                 end_offset: row.get(7)?,
                 word_count: row.get(8)?,
+                content_hash: row.get(9)?,
             })
         })?;
 
@@ -1156,7 +1159,7 @@ impl Storage {
 
     pub fn document_chunks(&self, document_id: &str) -> Result<Vec<ProjectChunk>> {
         let mut stmt = self.conn.prepare(
-            "SELECT ch.document_id, ch.id, d.path, ch.chunk_index, ch.title, ch.content, ch.start_offset, ch.end_offset, ch.word_count
+            "SELECT ch.document_id, ch.id, d.path, ch.chunk_index, ch.title, ch.content, ch.start_offset, ch.end_offset, ch.word_count, ch.content_hash
              FROM document_chunks ch JOIN documents d ON d.id = ch.document_id
              WHERE ch.document_id = ?1 ORDER BY ch.chunk_index ASC",
         )?;
@@ -1171,6 +1174,7 @@ impl Storage {
                 start_offset: row.get(6)?,
                 end_offset: row.get(7)?,
                 word_count: row.get(8)?,
+                content_hash: row.get(9)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -1185,7 +1189,7 @@ impl Storage {
         Ok(())
     }
 
-    fn existing_document_id(&self, project_id: &str, path: &str) -> Result<Option<String>> {
+    pub fn existing_document_id(&self, project_id: &str, path: &str) -> Result<Option<String>> {
         self.conn
             .query_row(
                 "SELECT id FROM documents WHERE project_id = ?1 AND path = ?2",

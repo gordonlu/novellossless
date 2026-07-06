@@ -147,5 +147,3 @@ fn normalize_name(raw: &str) -> String {
     })
     .to_string()
 }
-
-

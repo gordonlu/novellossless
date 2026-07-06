@@ -1,6 +1,8 @@
 mod analysis;
 mod profile;
+mod scan;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::analysis::extractor::{ChunkInfo, Extraction, Extractor};
@@ -35,6 +37,17 @@ pub struct ScanReport {
     pub skipped_files: usize,
     pub summary: ProjectSummary,
     pub analysis: AnalysisReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanResult {
+    pub scanned_documents: usize,
+    pub skipped_files: usize,
+    pub created: usize,
+    pub modified: usize,
+    pub unchanged: usize,
+    pub deleted: usize,
+    pub failed: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,6 +193,184 @@ impl NovelCore {
             summary,
             analysis,
         })
+    }
+
+    pub fn incremental_scan(&self, project_id: &str) -> Result<ScanResult> {
+        let project = self.storage.get_project(project_id)?
+            .with_context(|| format!("project not found: {project_id}"))?;
+        let root = PathBuf::from(&project.root_path);
+        let files = collect_text_files(&root)?;
+        let profile = self.profiles.first();
+        let enable_chunking = profile.map(|p| p.rules.chapter_recognition).unwrap_or(true);
+
+        let mut created = 0usize;
+        let mut modified = 0usize;
+        let mut unchanged = 0usize;
+        let mut failed = 0usize;
+        let mut file_paths: HashSet<String> = HashSet::new();
+
+        for file in &files {
+            let relative = relative_document_path(&root, file);
+            file_paths.insert(relative.clone());
+            let hash = file_content_hash(file)?;
+
+            match self.storage.existing_document_id(project_id, &relative)? {
+                None => {
+                    match self.scan_file(&project, &root, file, enable_chunking) {
+                        Ok(()) => {
+                            created += 1;
+                            if let Ok(Some(doc_id)) = self.storage.existing_document_id(project_id, &relative) {
+                                let _ = self.storage.record_file_scan(project_id, &doc_id, None, &hash, "created", None);
+                            }
+                        }
+                        Err(_) => failed += 1,
+                    }
+                }
+                Some(doc_id) => {
+                    let current_doc = self.storage.project_document_by_id(&doc_id)?;
+                    if current_doc.content_hash == hash {
+                        unchanged += 1;
+                        let _ = self.storage.record_file_scan(project_id, &doc_id, Some(&hash), &hash, "unchanged", None);
+                    } else {
+                        let old_chunks = self.storage.document_chunks(&doc_id)?;
+                        match self.scan_file(&project, &root, file, enable_chunking) {
+                            Ok(()) => {
+                                modified += 1;
+                                let parsed = novellossless_parser::parse_document(file)?;
+                                let chapters = if enable_chunking { parsed.chapters } else {
+                                    vec![novellossless_parser::Chapter {
+                                        index: 0, title: parsed.title.clone(), start_offset: 0,
+                                        end_offset: parsed.content.len(), content: parsed.content.clone(),
+                                    }]
+                                };
+                                let new_chunks: Vec<NewChunk> = chapters.iter().map(|ch| NewChunk {
+                                    chunk_index: ch.index as i64, title: ch.title.clone(),
+                                    start_offset: ch.start_offset as i64, end_offset: ch.end_offset as i64,
+                                    content: ch.content.clone(),
+                                    content_hash: sha256_hex(ch.content.as_bytes()),
+                                    word_count: count_words(&ch.content) as i64,
+                                }).collect();
+                                let diff = scan::diff_chunks(&old_chunks, &new_chunks);
+                                let diff_arr: Vec<serde_json::Value> = {
+                                    let mut v = Vec::new();
+                                    for a in &diff.added { v.push(serde_json::json!({"kind":"added","index":a.index,"title":a.title})); }
+                                    for r in &diff.removed { v.push(serde_json::json!({"kind":"removed","index":r.index,"title":r.title})); }
+                                    for m in &diff.modified { v.push(serde_json::json!({"kind":"modified","index":m.index,"old_title":m.old_title,"new_title":m.new_title})); }
+                                    v
+                                };
+                                let diff_json = serde_json::to_string(&diff_arr).ok();
+                                let _ = self.storage.record_file_scan(project_id, &doc_id, Some(&current_doc.content_hash), &hash, "modified", None);
+                                let _ = self.storage.record_revision(project_id, &doc_id, "incremental",
+                                    Some(&current_doc.content_hash), &hash,
+                                    old_chunks.len() as i64, new_chunks.len() as i64,
+                                    diff.added.len() as i64, diff.removed.len() as i64, diff.modified.len() as i64,
+                                    diff_json.as_deref());
+                            }
+                            Err(_) => failed += 1,
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut deleted = 0usize;
+        for doc in self.storage.project_documents(project_id)? {
+            if !file_paths.contains(&doc.path) {
+                self.storage.mark_document_deleted(&doc.id)?;
+                let _ = self.storage.record_file_scan(project_id, &doc.id, Some(&doc.content_hash), &doc.content_hash, "deleted", None);
+                deleted += 1;
+            }
+        }
+
+        let _ = self.analyze_project(project_id)?;
+
+        Ok(ScanResult {
+            scanned_documents: created + modified,
+            skipped_files: failed,
+            created, modified, unchanged, deleted, failed,
+        })
+    }
+
+    pub fn incremental_scan_file(&self, project_id: &str, file_path: &Path) -> Result<ScanResult> {
+        let project = self.storage.get_project(project_id)?
+            .with_context(|| format!("project not found: {project_id}"))?;
+        let root = PathBuf::from(&project.root_path);
+        let profile = self.profiles.first();
+        let enable_chunking = profile.map(|p| p.rules.chapter_recognition).unwrap_or(true);
+        let relative = relative_document_path(&root, file_path);
+        let hash = file_content_hash(file_path)?;
+
+        let mut result = ScanResult { scanned_documents: 0, skipped_files: 0, created: 0, modified: 0, unchanged: 0, deleted: 0, failed: 0 };
+
+        match self.storage.existing_document_id(project_id, &relative)? {
+            None => {
+                match self.scan_file(&project, &root, file_path, enable_chunking) {
+                    Ok(()) => {
+                        result.created = 1;
+                        if let Ok(Some(doc_id)) = self.storage.existing_document_id(project_id, &relative) {
+                            let _ = self.storage.record_file_scan(project_id, &doc_id, None, &hash, "created", None);
+                        }
+                    }
+                    Err(_) => result.failed = 1,
+                }
+            }
+            Some(doc_id) => {
+                let current_doc = self.storage.project_document_by_id(&doc_id)?;
+                if current_doc.content_hash == hash {
+                    result.unchanged = 1;
+                    let _ = self.storage.record_file_scan(project_id, &doc_id, Some(&hash), &hash, "unchanged", None);
+                } else {
+                    let old_chunks = self.storage.document_chunks(&doc_id)?;
+                    match self.scan_file(&project, &root, file_path, enable_chunking) {
+                        Ok(()) => {
+                            result.modified = 1;
+                            let parsed = novellossless_parser::parse_document(file_path)?;
+                            let chapters = if enable_chunking { parsed.chapters } else {
+                                vec![novellossless_parser::Chapter {
+                                    index: 0, title: parsed.title.clone(), start_offset: 0,
+                                    end_offset: parsed.content.len(), content: parsed.content.clone(),
+                                }]
+                            };
+                            let new_chunks: Vec<NewChunk> = chapters.iter().map(|ch| NewChunk {
+                                chunk_index: ch.index as i64, title: ch.title.clone(),
+                                start_offset: ch.start_offset as i64, end_offset: ch.end_offset as i64,
+                                content: ch.content.clone(),
+                                content_hash: sha256_hex(ch.content.as_bytes()),
+                                word_count: count_words(&ch.content) as i64,
+                            }).collect();
+                            let diff = scan::diff_chunks(&old_chunks, &new_chunks);
+                            let diff_arr: Vec<serde_json::Value> = {
+                                let mut v = Vec::new();
+                                for a in &diff.added { v.push(serde_json::json!({"kind":"added","index":a.index,"title":a.title})); }
+                                for r in &diff.removed { v.push(serde_json::json!({"kind":"removed","index":r.index,"title":r.title})); }
+                                for m in &diff.modified { v.push(serde_json::json!({"kind":"modified","index":m.index,"old_title":m.old_title,"new_title":m.new_title})); }
+                                v
+                            };
+                            let diff_json = serde_json::to_string(&diff_arr).ok();
+                            let _ = self.storage.record_file_scan(project_id, &doc_id, Some(&current_doc.content_hash), &hash, "modified", None);
+                            let _ = self.storage.record_revision(project_id, &doc_id, "incremental",
+                                Some(&current_doc.content_hash), &hash,
+                                old_chunks.len() as i64, new_chunks.len() as i64,
+                                diff.added.len() as i64, diff.removed.len() as i64, diff.modified.len() as i64,
+                                diff_json.as_deref());
+                        }
+                        Err(_) => result.failed = 1,
+                    }
+                }
+            }
+        }
+
+        result.scanned_documents = result.created + result.modified;
+        let _ = self.analyze_project(project_id)?;
+        Ok(result)
+    }
+
+    pub fn list_file_scans(&self, project_id: &str, limit: i64) -> Result<Vec<novellossless_storage::FileScanLog>> {
+        self.storage.list_file_scans(project_id, limit)
+    }
+
+    pub fn list_revisions(&self, project_id: &str, document_id: Option<&str>, limit: i64) -> Result<Vec<novellossless_storage::RevisionRecord>> {
+        self.storage.list_revisions(project_id, document_id, limit)
     }
 
     pub fn search(&self, project_id: &str, query: &str, limit: i64) -> Result<Vec<SearchHit>> {
@@ -556,6 +747,12 @@ fn count_words(content: &str) -> usize {
         .count()
 }
 
+fn file_content_hash(path: &Path) -> Result<String> {
+    let content = std::fs::read(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    Ok(sha256_hex(&content))
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     format!("{digest:x}")
@@ -645,6 +842,29 @@ mod tests {
     }
 
     #[test]
+    fn diff_chunks_detects_changes() {
+        use crate::scan::diff_chunks;
+        use novellossless_storage::{NewChunk, ProjectChunk};
+
+        let old = vec![
+            ProjectChunk { document_id: "d".into(), chunk_id: "c1".into(), document_path: "p".into(), chunk_index: 0, title: "A".into(), content: "aa".into(), start_offset: 0, end_offset: 2, word_count: 1, content_hash: "same".into() },
+            ProjectChunk { document_id: "d".into(), chunk_id: "c2".into(), document_path: "p".into(), chunk_index: 1, title: "B".into(), content: "bb".into(), start_offset: 3, end_offset: 5, word_count: 1, content_hash: "old_b".into() },
+        ];
+        let new = vec![
+            NewChunk { chunk_index: 0, title: "A".into(), start_offset: 0, end_offset: 2, content: "aa".into(), content_hash: "same".into(), word_count: 1 },
+            NewChunk { chunk_index: 1, title: "B2".into(), start_offset: 3, end_offset: 6, content: "bbb".into(), content_hash: "diff".into(), word_count: 1 },
+            NewChunk { chunk_index: 2, title: "C".into(), start_offset: 7, end_offset: 9, content: "cc".into(), content_hash: "new".into(), word_count: 1 },
+        ];
+
+        let diff = diff_chunks(&old, &new);
+        assert_eq!(diff.added.len(), 1);
+        assert_eq!(diff.added[0].index, 2);
+        assert_eq!(diff.removed.len(), 0);
+        assert_eq!(diff.modified.len(), 1);
+        assert_eq!(diff.modified[0].old_title, "B");
+        assert_eq!(diff.modified[0].new_title, "B2");
+    }
+
     fn person_aliases_are_merged() {
         let temp = tempfile::tempdir().expect("tempdir");
         let novel_dir = temp.path().join("novel");
