@@ -6,7 +6,6 @@ pub mod person;
 pub mod place;
 
 pub use conflicts::{EyeColorConflictExtractor, RepeatExpressionExtractor};
-pub use extractor::*;
 pub use foreshadow::ForeshadowExtractor;
 pub use item::ItemExtractor;
 pub use person::PersonExtractor;

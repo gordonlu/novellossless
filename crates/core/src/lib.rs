@@ -1,19 +1,21 @@
 mod analysis;
 mod profile;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
+use crate::analysis::extractor::{ChunkInfo, Extraction, Extractor};
+use crate::analysis::{
+    EyeColorConflictExtractor, ForeshadowExtractor, ItemExtractor, PersonExtractor, PlaceExtractor,
+    RepeatExpressionExtractor,
+};
 use crate::profile::{ExtractorRules, PeopleConfig, ProfileConfig};
 
 use anyhow::{Context, Result};
 use novellossless_parser::parse_document;
 use novellossless_storage::{
     ContextPack, ContinuityIssue, ForeshadowItem, NarrativeNode, NewChunk, NewContinuityIssue,
-    NewDocument, NewForeshadowItem, NewNarrativeNode, Project, ProjectChunk, ProjectSummary,
-    SearchHit, Storage,
+    NewDocument, NewForeshadowItem, NewNarrativeNode, Project, ProjectSummary, SearchHit, Storage,
 };
-use regex::Regex;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
@@ -71,23 +73,6 @@ pub struct ProfileInfo {
     pub name: String,
     pub version: String,
     pub description: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CandidateKind {
-    Person,
-    Place,
-    Item,
-}
-
-impl CandidateKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Person => "person",
-            Self::Place => "place",
-            Self::Item => "item",
-        }
-    }
 }
 
 impl NovelCore {
@@ -357,33 +342,86 @@ impl NovelCore {
 
     fn analyze_project(&self, project_id: &str) -> Result<AnalysisReport> {
         let chunks = self.storage.project_chunks(project_id)?;
+        let chunk_info: Vec<ChunkInfo> = chunks
+            .iter()
+            .map(|c| ChunkInfo {
+                document_id: c.document_id.clone(),
+                chunk_id: c.chunk_id.clone(),
+                document_path: c.document_path.clone(),
+                chunk_index: c.chunk_index,
+                title: c.title.clone(),
+                content: c.content.clone(),
+                start_offset: c.start_offset,
+                end_offset: c.end_offset,
+            })
+            .collect();
+
+        let mut extractors: Vec<Box<dyn Extractor>> = Vec::new();
         let rules = &self.extractor_rules;
 
-        let people = if rules.people {
-            extract_candidates(&chunks, CandidateKind::Person)?
-        } else {
-            Vec::new()
-        };
-        let places = if rules.places {
-            extract_candidates(&chunks, CandidateKind::Place)?
-        } else {
-            Vec::new()
-        };
-        let items = if rules.items {
-            extract_candidates(&chunks, CandidateKind::Item)?
-        } else {
-            Vec::new()
-        };
-        let foreshadows = if rules.foreshadows {
-            extract_foreshadows(&chunks)
-        } else {
-            Vec::new()
-        };
-        let issues = if rules.eye_color_conflicts || rules.repeat_expressions {
-            extract_issues(&chunks)?
-        } else {
-            Vec::new()
-        };
+        if rules.people {
+            extractors.push(Box::new(PersonExtractor::default()));
+        }
+        if rules.places {
+            extractors.push(Box::new(PlaceExtractor::default()));
+        }
+        if rules.items {
+            extractors.push(Box::new(ItemExtractor::default()));
+        }
+        if rules.foreshadows {
+            extractors.push(Box::new(ForeshadowExtractor::default()));
+        }
+        if rules.eye_color_conflicts {
+            extractors.push(Box::new(EyeColorConflictExtractor::default()));
+        }
+        if rules.repeat_expressions {
+            extractors.push(Box::new(RepeatExpressionExtractor::default()));
+        }
+
+        let mut people = Vec::new();
+        let mut places = Vec::new();
+        let mut items = Vec::new();
+        let mut foreshadows = Vec::new();
+        let mut issues = Vec::new();
+
+        for extractor in &extractors {
+            for extraction in extractor.extract(&chunk_info) {
+                match extraction {
+                    Extraction::Candidate(c) => {
+                        let node = NewNarrativeNode {
+                            node_type: c.node_type,
+                            name: c.name,
+                            occurrence_count: c.occurrence_count,
+                            first_chunk_id: c.first_chunk_id,
+                            latest_chunk_id: c.latest_chunk_id,
+                            confidence: c.confidence,
+                        };
+                        match node.node_type.as_str() {
+                            "person" => people.push(node),
+                            "place" => places.push(node),
+                            "item" => items.push(node),
+                            _ => {}
+                        }
+                    }
+                    Extraction::Foreshadow(f) => foreshadows.push(NewForeshadowItem {
+                        title: f.title,
+                        foreshadow_type: f.foreshadow_type,
+                        first_chunk_id: f.first_chunk_id,
+                        latest_chunk_id: f.latest_chunk_id,
+                        risk_level: f.risk_level,
+                        evidence: f.evidence,
+                    }),
+                    Extraction::Issue(iss) => issues.push(NewContinuityIssue {
+                        issue_type: iss.issue_type,
+                        severity: iss.severity,
+                        title: iss.title,
+                        description: iss.description,
+                        evidence_json: iss.evidence_json,
+                        suggested_actions_json: iss.suggested_actions_json,
+                    }),
+                }
+            }
+        }
 
         self.storage.upsert_narrative_nodes(project_id, &people)?;
         self.storage.upsert_narrative_nodes(project_id, &places)?;
@@ -481,351 +519,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     format!("{digest:x}")
 }
 
-fn extract_candidates(
-    chunks: &[ProjectChunk],
-    kind: CandidateKind,
-) -> Result<Vec<NewNarrativeNode>> {
-    let mut seen = BTreeMap::<String, CandidateAccumulator>::new();
-    let patterns = candidate_patterns(kind)?;
-
-    for chunk in chunks {
-        for pattern in &patterns {
-            for captures in pattern.captures_iter(&chunk.content) {
-                let Some(raw) = captures.get(1).map(|value| value.as_str()) else {
-                    continue;
-                };
-                let name = normalize_candidate(raw, kind);
-                if !is_candidate_name(&name, kind) {
-                    continue;
-                }
-
-                seen.entry(name.clone())
-                    .or_insert_with(|| CandidateAccumulator {
-                        count: 0,
-                        first_chunk_id: chunk.chunk_id.clone(),
-                        latest_chunk_id: chunk.chunk_id.clone(),
-                    });
-                if let Some(entry) = seen.get_mut(&name) {
-                    entry.count += 1;
-                    entry.latest_chunk_id = chunk.chunk_id.clone();
-                }
-            }
-        }
-    }
-
-    Ok(seen
-        .into_iter()
-        .filter(|(_, entry)| entry.count >= min_candidate_count(kind))
-        .map(|(name, entry)| NewNarrativeNode {
-            node_type: kind.as_str().to_string(),
-            name,
-            occurrence_count: entry.count,
-            first_chunk_id: entry.first_chunk_id,
-            latest_chunk_id: entry.latest_chunk_id,
-            confidence: candidate_confidence(entry.count),
-        })
-        .collect())
-}
-
-fn candidate_patterns(kind: CandidateKind) -> Result<Vec<Regex>> {
-    let raw_patterns = match kind {
-        CandidateKind::Person => vec![
-            r"([\p{Han}]{2,4})(?:说|问|道|喊|低声|笑道|看着|走进|转身)",
-            r"(?:向|对|跟)([\p{Han}]{2,4})(?:说|问|道)",
-        ],
-        CandidateKind::Place => vec![
-            r"([\p{Han}]{1,6}(?:城|镇|村|街|巷|楼|塔|宫|殿|府|山|谷|阁|院|桥|寺|观|港|站|基地|星球|舰船))",
-        ],
-        CandidateKind::Item => vec![
-            r"([\p{Han}]{0,4}(?:钥匙|信|戒指|刀|剑|书|照片|芯片|卷轴|玉佩|伞|令牌|地图|药瓶|手札|玉简))",
-            r"(?:拿起|藏起|交给|寻找|丢失|夺走|握住)([\p{Han}]{1,6})",
-        ],
-    };
-
-    raw_patterns
-        .into_iter()
-        .map(Regex::new)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(Into::into)
-}
-
-fn normalize_candidate(raw: &str, kind: CandidateKind) -> String {
-    let trimmed = raw.trim_matches(|ch: char| {
-        ch.is_whitespace()
-            || matches!(
-                ch,
-                '，' | '。' | '、' | '：' | '；' | '“' | '”' | '"' | '\'' | '《' | '》'
-            )
-    });
-
-    match kind {
-        CandidateKind::Person => trimmed.to_string(),
-        CandidateKind::Place => trim_after_context_verb(
-            trimmed,
-            &[
-                "城", "镇", "村", "街", "巷", "楼", "塔", "宫", "殿", "府", "山", "谷", "阁", "院",
-                "桥", "寺", "观", "港", "站", "基地", "星球", "舰船",
-            ],
-        ),
-        CandidateKind::Item => trim_quantity_prefix(&trim_after_context_verb(
-            trimmed,
-            &[
-                "钥匙", "信", "戒指", "刀", "剑", "书", "照片", "芯片", "卷轴", "玉佩", "伞",
-                "令牌", "地图", "药瓶", "手札", "玉简",
-            ],
-        )),
-    }
-}
-
-fn trim_quantity_prefix(value: &str) -> String {
-    for prefix in [
-        "那枚", "这枚", "一枚", "那把", "这把", "一把", "那封", "这封", "一封",
-    ] {
-        if let Some(stripped) = value.strip_prefix(prefix) {
-            return stripped.to_string();
-        }
-    }
-    value.to_string()
-}
-
-fn trim_after_context_verb(raw: &str, suffixes: &[&str]) -> String {
-    let context_verbs = [
-        "说", "问", "道", "看着", "走进", "拿起", "藏起", "交给", "寻找", "丢失", "夺走", "握住",
-        "回到", "离开", "来到",
-    ];
-    let mut value = raw.to_string();
-    for verb in context_verbs {
-        if let Some((_, right)) = value.rsplit_once(verb) {
-            if !right.is_empty() {
-                value = right.to_string();
-                break;
-            }
-        }
-    }
-
-    for suffix in suffixes {
-        if let Some(pos) = value.rfind(suffix) {
-            let end = pos + suffix.len();
-            value.truncate(end);
-            break;
-        }
-    }
-
-    value
-}
-
-fn is_candidate_name(name: &str, kind: CandidateKind) -> bool {
-    if name.chars().count() < 2 {
-        return false;
-    }
-
-    let stopwords = [
-        "自己", "什么", "这里", "那里", "哪里", "这个", "那个", "他们", "我们", "你们", "没有",
-        "不是", "已经", "突然",
-    ];
-    if stopwords.contains(&name) {
-        return false;
-    }
-
-    match kind {
-        CandidateKind::Person => !name.ends_with("里") && !name.ends_with("中"),
-        CandidateKind::Place | CandidateKind::Item => true,
-    }
-}
-
-fn min_candidate_count(kind: CandidateKind) -> i64 {
-    match kind {
-        CandidateKind::Person => 1,
-        CandidateKind::Place => 1,
-        CandidateKind::Item => 1,
-    }
-}
-
-fn candidate_confidence(count: i64) -> i64 {
-    (50 + count.saturating_mul(10)).min(90)
-}
-
-fn extract_foreshadows(chunks: &[ProjectChunk]) -> Vec<NewForeshadowItem> {
-    let markers = [
-        "秘密",
-        "线索",
-        "预感",
-        "总觉得",
-        "似乎",
-        "好像",
-        "日后",
-        "终有一日",
-        "钥匙",
-        "信物",
-        "谜",
-    ];
-    let mut items = Vec::new();
-    let mut seen = BTreeSet::new();
-
-    for chunk in chunks {
-        for sentence in split_sentences(&chunk.content) {
-            if !markers.iter().any(|marker| sentence.contains(marker)) {
-                continue;
-            }
-            let title = sentence.chars().take(28).collect::<String>();
-            let key = format!("{}:{}", chunk.chunk_id, title);
-            if !seen.insert(key) {
-                continue;
-            }
-            items.push(NewForeshadowItem {
-                title,
-                foreshadow_type: "explicit_clue".to_string(),
-                first_chunk_id: chunk.chunk_id.clone(),
-                latest_chunk_id: chunk.chunk_id.clone(),
-                risk_level: "medium".to_string(),
-                evidence: sentence.chars().take(120).collect(),
-            });
-        }
-    }
-
-    items
-}
-
-fn extract_issues(chunks: &[ProjectChunk]) -> Result<Vec<NewContinuityIssue>> {
-    let mut issues = Vec::new();
-    issues.extend(extract_eye_color_conflicts(chunks)?);
-    issues.extend(extract_repeat_expression_issues(chunks));
-    Ok(issues)
-}
-
-fn extract_eye_color_conflicts(chunks: &[ProjectChunk]) -> Result<Vec<NewContinuityIssue>> {
-    let pattern = Regex::new(
-        r"([\p{Han}]{2,4}).{0,12}(黑色|灰蓝色|蓝色|褐色|金色|红色|琥珀色).{0,8}(?:眼睛|眼眸|眸子)",
-    )?;
-    let mut facts = HashMap::<String, BTreeMap<String, Vec<&ProjectChunk>>>::new();
-
-    for chunk in chunks {
-        for captures in pattern.captures_iter(&chunk.content) {
-            let Some(person) = captures
-                .get(1)
-                .map(|value| normalize_candidate(value.as_str(), CandidateKind::Person))
-            else {
-                continue;
-            };
-            let Some(color) = captures.get(2).map(|value| value.as_str().to_string()) else {
-                continue;
-            };
-            facts
-                .entry(person)
-                .or_default()
-                .entry(color)
-                .or_default()
-                .push(chunk);
-        }
-    }
-
-    let mut issues = Vec::new();
-    for (person, colors) in facts {
-        if colors.len() < 2 {
-            continue;
-        }
-        let evidence = colors
-            .iter()
-            .filter_map(|(color, chunks)| {
-                chunks.first().map(|chunk| {
-                    json!({
-                        "color": color,
-                        "chunk_id": chunk.chunk_id,
-                        "title": chunk.title,
-                        "document_path": chunk.document_path,
-                        "snippet": chunk.content.chars().take(100).collect::<String>(),
-                    })
-                })
-            })
-            .collect::<Vec<_>>();
-        issues.push(NewContinuityIssue {
-            issue_type: "character_attribute_conflict".to_string(),
-            severity: "high".to_string(),
-            title: format!("{person} 的眼睛颜色可能前后不一致"),
-            description: format!("{person} 出现了多个眼睛颜色候选，请依据正文确认。"),
-            evidence_json: serde_json::to_string(&evidence)?,
-            suggested_actions_json: serde_json::to_string(&json!([
-                "保持旧设定",
-                "接受新设定",
-                "标记为伪装",
-                "标记为角色认知",
-                "标记误报"
-            ]))?,
-        });
-    }
-
-    Ok(issues)
-}
-
-fn extract_repeat_expression_issues(chunks: &[ProjectChunk]) -> Vec<NewContinuityIssue> {
-    let watched_terms = ["雨夜", "沉默", "钟声", "秘密", "黑暗"];
-    let mut issues = Vec::new();
-
-    for term in watched_terms {
-        let hits = chunks
-            .iter()
-            .filter(|chunk| chunk.content.contains(term))
-            .collect::<Vec<_>>();
-        if hits.len() < 3 {
-            continue;
-        }
-
-        let evidence = hits
-            .iter()
-            .take(5)
-            .map(|chunk| {
-                json!({
-                    "chunk_id": chunk.chunk_id,
-                    "title": chunk.title,
-                    "document_path": chunk.document_path,
-                    "snippet": make_local_snippet(&chunk.content, term),
-                })
-            })
-            .collect::<Vec<_>>();
-
-        issues.push(NewContinuityIssue {
-            issue_type: "repeat_expression".to_string(),
-            severity: "low".to_string(),
-            title: format!("“{term}”反复出现"),
-            description: format!(
-                "“{term}”在多个正文片段中重复出现，可在周报或修订时检查是否有意为之。"
-            ),
-            evidence_json: serde_json::to_string(&evidence).unwrap_or_else(|_| "[]".to_string()),
-            suggested_actions_json: serde_json::to_string(&json!([
-                "稍后处理",
-                "标记为有意为之",
-                "创建修订任务",
-                "标记误报"
-            ]))
-            .unwrap_or_else(|_| "[]".to_string()),
-        });
-    }
-
-    issues
-}
-
-fn split_sentences(content: &str) -> Vec<String> {
-    content
-        .split(['。', '！', '？', '\n'])
-        .map(str::trim)
-        .filter(|value| value.chars().count() >= 8)
-        .map(ToString::to_string)
-        .collect()
-}
-
-fn make_local_snippet(content: &str, query: &str) -> String {
-    content
-        .find(query)
-        .map(|byte_start| {
-            let char_start = content[..byte_start].chars().count();
-            let chars = content.chars().collect::<Vec<_>>();
-            let prefix = char_start.saturating_sub(18);
-            let suffix = (char_start + query.chars().count() + 18).min(chars.len());
-            chars[prefix..suffix].iter().collect()
-        })
-        .unwrap_or_else(|| content.chars().take(60).collect())
-}
-
 fn plain_snippet(snippet: &str) -> String {
     snippet.replace(['[', ']'], "")
 }
@@ -858,13 +551,6 @@ fn load_profiles_from(profiles_root: &Path) -> Vec<ProfileConfig> {
     toml::from_str::<ProfileConfig>(&content)
         .map(|p| vec![p])
         .unwrap_or_default()
-}
-
-#[derive(Debug)]
-struct CandidateAccumulator {
-    count: i64,
-    first_chunk_id: String,
-    latest_chunk_id: String,
 }
 
 #[cfg(test)]
