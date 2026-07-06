@@ -76,6 +76,36 @@ pub struct ProjectDocument {
     pub title: String,
     pub chapter_count: i64,
     pub word_count: i64,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileScanLog {
+    pub id: String,
+    pub project_id: String,
+    pub document_id: String,
+    pub old_hash: Option<String>,
+    pub new_hash: String,
+    pub event_type: String,
+    pub scanned_at: String,
+    pub details: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RevisionRecord {
+    pub id: String,
+    pub project_id: String,
+    pub document_id: String,
+    pub revision_type: String,
+    pub old_content_hash: Option<String>,
+    pub new_content_hash: String,
+    pub old_chunk_count: i64,
+    pub new_chunk_count: i64,
+    pub chunks_added: i64,
+    pub chunks_removed: i64,
+    pub chunks_modified: i64,
+    pub diff_json: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -300,6 +330,33 @@ impl Storage {
                 content TEXT NOT NULL,
                 format TEXT NOT NULL,
                 source_refs_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS file_scan_log (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                old_hash TEXT,
+                new_hash TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                scanned_at TEXT NOT NULL,
+                details TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS revision_history (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                revision_type TEXT NOT NULL,
+                old_content_hash TEXT,
+                new_content_hash TEXT NOT NULL,
+                old_chunk_count INTEGER NOT NULL DEFAULT 0,
+                new_chunk_count INTEGER NOT NULL DEFAULT 0,
+                chunks_added INTEGER NOT NULL DEFAULT 0,
+                chunks_removed INTEGER NOT NULL DEFAULT 0,
+                chunks_modified INTEGER NOT NULL DEFAULT 0,
+                diff_json TEXT,
                 created_at TEXT NOT NULL
             );
             "#,
@@ -628,7 +685,7 @@ impl Storage {
     pub fn project_documents(&self, project_id: &str) -> Result<Vec<ProjectDocument>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, path, title, chapter_count, word_count
+            SELECT id, path, title, chapter_count, word_count, content_hash
             FROM documents
             WHERE project_id = ?1 AND deleted = 0
             ORDER BY path ASC
@@ -642,6 +699,7 @@ impl Storage {
                 title: row.get(2)?,
                 chapter_count: row.get(3)?,
                 word_count: row.get(4)?,
+                content_hash: row.get(5)?,
             })
         })?;
 
@@ -962,6 +1020,171 @@ impl Storage {
         Ok(pack)
     }
 
+    pub fn record_file_scan(
+        &self,
+        project_id: &str,
+        document_id: &str,
+        old_hash: Option<&str>,
+        new_hash: &str,
+        event_type: &str,
+        details: Option<&str>,
+    ) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO file_scan_log (id, project_id, document_id, old_hash, new_hash, event_type, scanned_at, details)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, project_id, document_id, old_hash, new_hash, event_type, now, details],
+        )?;
+        Ok(id)
+    }
+
+    pub fn record_revision(
+        &self,
+        project_id: &str,
+        document_id: &str,
+        revision_type: &str,
+        old_hash: Option<&str>,
+        new_hash: &str,
+        old_chunk_count: i64,
+        new_chunk_count: i64,
+        chunks_added: i64,
+        chunks_removed: i64,
+        chunks_modified: i64,
+        diff_json: Option<&str>,
+    ) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO revision_history (id, project_id, document_id, revision_type, old_content_hash, new_content_hash, old_chunk_count, new_chunk_count, chunks_added, chunks_removed, chunks_modified, diff_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![id, project_id, document_id, revision_type, old_hash, new_hash, old_chunk_count, new_chunk_count, chunks_added, chunks_removed, chunks_modified, diff_json, now],
+        )?;
+        Ok(id)
+    }
+
+    pub fn list_file_scans(&self, project_id: &str, limit: i64) -> Result<Vec<FileScanLog>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, document_id, old_hash, new_hash, event_type, scanned_at, details
+             FROM file_scan_log WHERE project_id = ?1 ORDER BY scanned_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![project_id, limit], |row| {
+            Ok(FileScanLog {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                document_id: row.get(2)?,
+                old_hash: row.get(3)?,
+                new_hash: row.get(4)?,
+                event_type: row.get(5)?,
+                scanned_at: row.get(6)?,
+                details: row.get(7)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn list_revisions(
+        &self,
+        project_id: &str,
+        document_id: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<RevisionRecord>> {
+        let (clause, pid, doc) = match document_id {
+            Some(d) => (
+                "WHERE project_id = ?1 AND document_id = ?2".to_string(),
+                project_id.to_string(),
+                d.to_string(),
+            ),
+            None => (
+                "WHERE project_id = ?1".to_string(),
+                project_id.to_string(),
+                String::new(),
+            ),
+        };
+        let sql = format!(
+            "SELECT id, project_id, document_id, revision_type, old_content_hash, new_content_hash, \
+             old_chunk_count, new_chunk_count, chunks_added, chunks_removed, chunks_modified, \
+             diff_json, created_at FROM revision_history {clause} ORDER BY created_at DESC LIMIT ?3"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let map_row = |row: &rusqlite::Row<'_>| {
+            Ok(RevisionRecord {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                document_id: row.get(2)?,
+                revision_type: row.get(3)?,
+                old_content_hash: row.get(4)?,
+                new_content_hash: row.get(5)?,
+                old_chunk_count: row.get(6)?,
+                new_chunk_count: row.get(7)?,
+                chunks_added: row.get(8)?,
+                chunks_removed: row.get(9)?,
+                chunks_modified: row.get(10)?,
+                diff_json: row.get(11)?,
+                created_at: row.get(12)?,
+            })
+        };
+        let rows = if document_id.is_some() {
+            stmt.query_map(params![pid, doc, limit], map_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        } else {
+            stmt.query_map(params![pid, limit], map_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        Ok(rows)
+    }
+
+    pub fn project_document_by_id(&self, id: &str) -> Result<ProjectDocument> {
+        self.conn
+            .query_row(
+                "SELECT id, path, title, chapter_count, word_count, content_hash FROM documents WHERE id = ?1 AND deleted = 0",
+                params![id],
+                |row| {
+                    Ok(ProjectDocument {
+                        id: row.get(0)?,
+                        path: row.get(1)?,
+                        title: row.get(2)?,
+                        chapter_count: row.get(3)?,
+                        word_count: row.get(4)?,
+                        content_hash: row.get(5)?,
+                    })
+                },
+            )
+            .map_err(Into::into)
+    }
+
+    pub fn document_chunks(&self, document_id: &str) -> Result<Vec<ProjectChunk>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ch.document_id, ch.id, d.path, ch.chunk_index, ch.title, ch.content, ch.start_offset, ch.end_offset, ch.word_count
+             FROM document_chunks ch JOIN documents d ON d.id = ch.document_id
+             WHERE ch.document_id = ?1 ORDER BY ch.chunk_index ASC",
+        )?;
+        let rows = stmt.query_map(params![document_id], |row| {
+            Ok(ProjectChunk {
+                document_id: row.get(0)?,
+                chunk_id: row.get(1)?,
+                document_path: row.get(2)?,
+                chunk_index: row.get(3)?,
+                title: row.get(4)?,
+                content: row.get(5)?,
+                start_offset: row.get(6)?,
+                end_offset: row.get(7)?,
+                word_count: row.get(8)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn mark_document_deleted(&self, id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE documents SET deleted = 1 WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
     fn existing_document_id(&self, project_id: &str, path: &str) -> Result<Option<String>> {
         self.conn
             .query_row(
@@ -1114,6 +1337,78 @@ mod tests {
 
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "雨巷钟声");
+    }
+
+    fn test_storage() -> Result<Storage> {
+        Storage::open_memory()
+    }
+
+    fn test_storage_with_project(name: &str) -> Result<(Storage, String)> {
+        let storage = test_storage()?;
+        let project = storage.create_project(name, &format!("/tmp/{name}"))?;
+        Ok((storage, project.id))
+    }
+
+    fn seed_document(storage: &Storage, project_id: &str, path: &str) -> Result<String> {
+        storage.upsert_document_with_chunks(
+            project_id,
+            &NewDocument {
+                path: path.to_string(),
+                kind: "text".to_string(),
+                title: "第一章".to_string(),
+                chapter_count: 1,
+                content_hash: "abc".to_string(),
+                word_count: 4,
+                encoding: "utf-8".to_string(),
+            },
+            &[NewChunk {
+                chunk_index: 0,
+                title: "第一章".to_string(),
+                start_offset: 0,
+                end_offset: 4,
+                content: "test".to_string(),
+                content_hash: "chunk-hash".to_string(),
+                word_count: 1,
+            }],
+        )
+    }
+
+    #[test]
+    fn records_and_lists_file_scan_logs() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("scan_log_test")?;
+        let doc_id = seed_document(&storage, &pid, "001.txt")?;
+        let id = storage.record_file_scan(&pid, &doc_id, None, "abc", "created", None)?;
+        assert!(!id.is_empty());
+        let logs = storage.list_file_scans(&pid, 10)?;
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].event_type, "created");
+        assert_eq!(logs[0].new_hash, "abc");
+        Ok(())
+    }
+
+    #[test]
+    fn records_and_lists_revisions() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("rev_test")?;
+        let doc_id = seed_document(&storage, &pid, "001.txt")?;
+        let diff = r#"[{"kind":"modified","index":0}]"#;
+        let id = storage.record_revision(
+            &pid,
+            &doc_id,
+            "incremental",
+            Some("old"),
+            "new",
+            1,
+            1,
+            0,
+            0,
+            1,
+            Some(diff),
+        )?;
+        assert!(!id.is_empty());
+        let revs = storage.list_revisions(&pid, Some(&doc_id), 10)?;
+        assert_eq!(revs.len(), 1);
+        assert_eq!(revs[0].chunks_modified, 1);
+        Ok(())
     }
 
     #[test]
