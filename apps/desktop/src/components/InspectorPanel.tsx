@@ -4,13 +4,13 @@ import { basename, plainSnippet } from "../lib/helpers";
 
 interface InspectorPanelProps {
   selectedHit: SearchHit | null;
-  onRevealSource: () => void;
-  issuesCount: number;
-  privacy: PrivacyStatus;
-  profiles: ProfileInfo[];
+  onRevealSource?: () => void;
+  issuesCount?: number;
+  privacy?: PrivacyStatus;
+  profiles?: ProfileInfo[];
 }
 
-export function InspectorPanel({ selectedHit, onRevealSource, issuesCount, privacy, profiles }: InspectorPanelProps) {
+export function InspectorPanel({ selectedHit, onRevealSource = () => {}, issuesCount = 0, privacy = { offlineMode: true, aiEnabled: false, uploadsEnabled: false, clipboardAccess: false, screenshotAccess: false, keyboardMonitoring: false, databasePath: "", storageMode: "" }, profiles = [] }: InspectorPanelProps) {
   return (
     <aside className="inspector">
       <section className="panel evidence-panel">

@@ -676,7 +676,7 @@ export function App() {
           />
           <Route path="/content" element={<ContentView />} />
           <Route path="/search" element={<SearchView />} />
-          <Route path="/characters" element={<Characters />} />
+          <Route path="/characters" element={<Characters projectId={selectedProject.id} />} />
           <Route path="/foreshadows" element={<Foreshadows />} />
           <Route path="/timeline" element={<Timeline />} />
           <Route path="/issues" element={<Issues />} />

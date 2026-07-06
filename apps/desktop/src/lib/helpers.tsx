@@ -27,6 +27,12 @@ export function riskLabel(risk: string) {
   return "待确认";
 }
 
+export function statusLabel(status: string) {
+  if (status === "confirmed") return "已确认";
+  if (status === "dismissed") return "误报";
+  return "候选";
+}
+
 export function severityLabel(severity: string) {
   if (severity === "serious") return "严重";
   if (severity === "high") return "高";
