@@ -235,3 +235,70 @@ export function getDocumentChunks(projectId: string) {
   ensureDesktopRuntime();
   return invoke<DocumentTree>("get_document_chunks", { projectId });
 }
+
+export interface ScanResult {
+  scannedDocuments: number;
+  skippedFiles: number;
+  created: number;
+  modified: number;
+  unchanged: number;
+  deleted: number;
+  failed: number;
+}
+
+export interface FileScanLog {
+  id: string;
+  projectId: string;
+  documentId: string;
+  oldHash: string | null;
+  newHash: string;
+  eventType: string;
+  scannedAt: string;
+  details: string | null;
+}
+
+export interface RevisionRecord {
+  id: string;
+  projectId: string;
+  documentId: string;
+  revisionType: string;
+  oldContentHash: string | null;
+  newContentHash: string;
+  oldChunkCount: number;
+  newChunkCount: number;
+  chunksAdded: number;
+  chunksRemoved: number;
+  chunksModified: number;
+  diffJson: string | null;
+  createdAt: string;
+}
+
+export function incrementalScan(projectId: string) {
+  ensureDesktopRuntime();
+  return invoke<ScanResult>("incremental_scan", { projectId });
+}
+
+export function listFileScans(projectId: string, limit: number) {
+  ensureDesktopRuntime();
+  return invoke<FileScanLog[]>("list_file_scans", { projectId, limit });
+}
+
+export function listRevisions(projectId: string, documentId: string | null, limit: number) {
+  ensureDesktopRuntime();
+  return invoke<RevisionRecord[]>("list_revisions", { projectId, documentId, limit });
+}
+
+export function startWatching(projectId: string) {
+  ensureDesktopRuntime();
+  return invoke<void>("start_watching", { projectId });
+}
+
+export function stopWatching() {
+  ensureDesktopRuntime();
+  return invoke<void>("stop_watching");
+}
+
+export function watcherStatus() {
+  ensureDesktopRuntime();
+  return invoke<boolean>("watcher_status");
+}

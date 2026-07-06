@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, BookOpenText, CheckCircle2, Clock3, Database, Home, LockKeyhole, Network, RefreshCw, Search, ShieldCheck, UserRound } from "lucide-react";
+import { AlertTriangle, Archive, BookOpenText, CheckCircle2, Clock3, Database, History, Home, LockKeyhole, Network, RefreshCw, Search, ShieldCheck, UserRound } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { clsx } from "clsx";
 import { useEffect, useState } from "react";
@@ -38,6 +38,7 @@ import { Dashboard as DashboardRoute } from "./routes/Dashboard";
 import { Foreshadows } from "./routes/Foreshadows";
 import { Issues } from "./routes/Issues";
 import { Privacy } from "./routes/Privacy";
+import { RevisionHistory } from "./routes/RevisionHistory";
 import { SearchView } from "./routes/SearchView";
 import { Timeline } from "./routes/Timeline";
 
@@ -57,6 +58,7 @@ const navigation = [
   { label: "伏笔", icon: Network, path: "/foreshadows" },
   { label: "时间线", icon: Clock3, path: "/timeline" },
   { label: "冲突报告", icon: AlertTriangle, path: "/issues" },
+  { label: "改稿历史", icon: History, path: "/history" },
   { label: "上下文包", icon: Archive, path: "/context-pack" },
   { label: "隐私中心", icon: LockKeyhole, path: "/privacy" },
 ];
@@ -584,6 +586,7 @@ export function App() {
           <Route path="/foreshadows" element={<Foreshadows projectId={selectedProject.id} />} />
           <Route path="/timeline" element={<Timeline />} />
           <Route path="/issues" element={<Issues projectId={selectedProject.id} />} />
+          <Route path="/history" element={<RevisionHistory projectId={selectedProject.id} />} />
           <Route path="/context-pack" element={<ContextPackRoute />} />
           <Route
             path="/privacy"

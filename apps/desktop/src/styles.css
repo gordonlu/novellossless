@@ -967,6 +967,62 @@ blockquote {
   overflow-y: auto;
 }
 
+.scan-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.scan-toolbar button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scan-toolbar .watching {
+  background: #d4edda;
+  border-color: #c3e6cb;
+  color: #155724;
+}
+
+.revision-card {
+  padding: 10px;
+  margin-bottom: 8px;
+  border: 1px solid #e2dccf;
+  border-radius: 8px;
+  background: #fffefb;
+}
+
+.revision-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #817a70;
+}
+
+.revision-stats {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: #625f58;
+}
+
+.revision-diff {
+  margin-top: 6px;
+  padding: 6px;
+  border-radius: 4px;
+  background: #f7f5ef;
+  font-size: 11px;
+  overflow-x: auto;
+}
+
+.evt-created { background: #d4edda; color: #155724; }
+.evt-modified { background: #fff3cd; color: #856404; }
+.evt-unchanged { background: #e2e3e5; color: #383d41; }
+.evt-deleted { background: #f8d7da; color: #721c24; }
+.evt-failed { background: #f8d7da; color: #721c24; }
+
 @media (max-width: 1180px) {
   body {
     overflow: auto;
