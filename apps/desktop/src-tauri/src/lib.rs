@@ -1,11 +1,12 @@
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use novellossless_core::{
     Dashboard, DocumentTree, NovelCore, PrivacyStatus, ProfileInfo, ScanReport,
 };
 use novellossless_storage::{
-    ContextPack, ContinuityIssue, ForeshadowItem, NarrativeNode, Project, ProjectChunk,
-    ProjectSummary, SearchHit,
+    ContextPack, ContinuityIssue, FileScanLog, ForeshadowItem, NarrativeNode, Project,
+    ProjectChunk, ProjectSummary, RevisionRecord, SearchHit,
 };
 use serde::Serialize;
 use tauri::Manager;
@@ -181,6 +182,51 @@ struct DocumentTreeDto {
     chunks: Vec<ChunkDto>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanResultDto {
+    scanned_documents: usize,
+    skipped_files: usize,
+    created: usize,
+    modified: usize,
+    unchanged: usize,
+    deleted: usize,
+    failed: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileScanLogDto {
+    id: String,
+    project_id: String,
+    document_id: String,
+    old_hash: Option<String>,
+    new_hash: String,
+    event_type: String,
+    scanned_at: String,
+    details: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RevisionRecordDto {
+    id: String,
+    project_id: String,
+    document_id: String,
+    revision_type: String,
+    old_content_hash: Option<String>,
+    new_content_hash: String,
+    old_chunk_count: i64,
+    new_chunk_count: i64,
+    chunks_added: i64,
+    chunks_removed: i64,
+    chunks_modified: i64,
+    diff_json: Option<String>,
+    created_at: String,
+}
+
+struct WatcherState(Mutex<Option<crate::watcher::FileWatcher>>);
+
 #[tauri::command]
 fn list_projects(app: tauri::AppHandle) -> Result<Vec<ProjectDto>, String> {
     let core = open_core(&app)?;
@@ -343,10 +389,93 @@ fn get_document_chunks(
         .map_err(to_command_error)
 }
 
+#[tauri::command]
+fn incremental_scan(app: tauri::AppHandle, project_id: String) -> Result<ScanResultDto, String> {
+    let core = open_core(&app)?;
+    core.incremental_scan(&project_id)
+        .map(ScanResultDto::from)
+        .map_err(to_command_error)
+}
+
+#[tauri::command]
+fn list_file_scans(
+    app: tauri::AppHandle,
+    project_id: String,
+    limit: i64,
+) -> Result<Vec<FileScanLogDto>, String> {
+    let core = open_core(&app)?;
+    core.list_file_scans(&project_id, limit)
+        .map(|v| v.into_iter().map(FileScanLogDto::from).collect())
+        .map_err(to_command_error)
+}
+
+#[tauri::command]
+fn list_revisions(
+    app: tauri::AppHandle,
+    project_id: String,
+    document_id: Option<String>,
+    limit: i64,
+) -> Result<Vec<RevisionRecordDto>, String> {
+    let core = open_core(&app)?;
+    core.list_revisions(&project_id, document_id.as_deref(), limit)
+        .map(|v| v.into_iter().map(RevisionRecordDto::from).collect())
+        .map_err(to_command_error)
+}
+
+#[tauri::command]
+fn start_watching(app: tauri::AppHandle, project_id: String) -> Result<(), String> {
+    let core = open_core(&app)?;
+    let project = core
+        .get_project(&project_id)
+        .map_err(to_command_error)?
+        .ok_or_else(|| "project not found".to_string())?;
+    let root = PathBuf::from(&project.root_path);
+
+    let app_handle = app.clone();
+    let watcher = crate::watcher::FileWatcher::start(&project_id, &root, move |pid, path| {
+        if let Ok(core) = open_core(&app_handle) {
+            let _ = core.incremental_scan_file(&pid, &path);
+        }
+    })?;
+
+    if let Some(state) = app.try_state::<WatcherState>() {
+        if let Ok(mut w) = state.0.lock() {
+            if let Some(mut old) = w.replace(watcher) {
+                old.stop();
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_watching(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(state) = app.try_state::<WatcherState>() {
+        if let Ok(mut w) = state.0.lock() {
+            if let Some(ref mut watcher) = *w {
+                watcher.stop();
+            }
+            *w = None;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn watcher_status(app: tauri::AppHandle) -> Result<bool, String> {
+    if let Some(state) = app.try_state::<WatcherState>() {
+        if let Ok(guard) = state.0.lock() {
+            return Ok(guard.is_some());
+        }
+    }
+    Ok(false)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(WatcherState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             list_projects,
             import_project,
@@ -363,7 +492,13 @@ pub fn run() {
             get_project_summary,
             get_privacy_status,
             list_profiles,
-            get_document_chunks
+            get_document_chunks,
+            incremental_scan,
+            list_file_scans,
+            list_revisions,
+            start_watching,
+            stop_watching,
+            watcher_status
         ])
         .run(tauri::generate_context!())
         .expect("failed to run novellossless desktop app");
@@ -593,6 +728,55 @@ impl From<ProjectChunk> for ChunkDto {
             content: chunk.content,
             start_offset: chunk.start_offset,
             word_count: chunk.word_count,
+        }
+    }
+}
+
+impl From<novellossless_core::ScanResult> for ScanResultDto {
+    fn from(r: novellossless_core::ScanResult) -> Self {
+        Self {
+            scanned_documents: r.scanned_documents,
+            skipped_files: r.skipped_files,
+            created: r.created,
+            modified: r.modified,
+            unchanged: r.unchanged,
+            deleted: r.deleted,
+            failed: r.failed,
+        }
+    }
+}
+
+impl From<FileScanLog> for FileScanLogDto {
+    fn from(l: FileScanLog) -> Self {
+        Self {
+            id: l.id,
+            project_id: l.project_id,
+            document_id: l.document_id,
+            old_hash: l.old_hash,
+            new_hash: l.new_hash,
+            event_type: l.event_type,
+            scanned_at: l.scanned_at,
+            details: l.details,
+        }
+    }
+}
+
+impl From<RevisionRecord> for RevisionRecordDto {
+    fn from(r: RevisionRecord) -> Self {
+        Self {
+            id: r.id,
+            project_id: r.project_id,
+            document_id: r.document_id,
+            revision_type: r.revision_type,
+            old_content_hash: r.old_content_hash,
+            new_content_hash: r.new_content_hash,
+            old_chunk_count: r.old_chunk_count,
+            new_chunk_count: r.new_chunk_count,
+            chunks_added: r.chunks_added,
+            chunks_removed: r.chunks_removed,
+            chunks_modified: r.chunks_modified,
+            diff_json: r.diff_json,
+            created_at: r.created_at,
         }
     }
 }

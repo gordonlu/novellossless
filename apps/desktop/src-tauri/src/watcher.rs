@@ -32,7 +32,8 @@ impl FileWatcher {
         )
         .map_err(|e| format!("failed to create watcher: {e}"))?;
 
-        watcher.watch(root, RecursiveMode::Recursive)
+        watcher
+            .watch(root, RecursiveMode::Recursive)
             .map_err(|e| format!("failed to watch {root:?}: {e}"))?;
 
         let running = Arc::new(Mutex::new(true));
@@ -44,7 +45,9 @@ impl FileWatcher {
             let mut last_event = Instant::now();
 
             loop {
-                if !*r.lock().unwrap() { break; }
+                if !*r.lock().unwrap() {
+                    break;
+                }
                 match rx.recv_timeout(Duration::from_millis(200)) {
                     Ok(Ok(event)) => {
                         for path in &event.paths {
@@ -56,7 +59,9 @@ impl FileWatcher {
                     }
                     Ok(Err(_)) => {}
                     Err(mpsc::RecvTimeoutError::Timeout) => {
-                        if !pending.is_empty() && last_event.elapsed() >= Duration::from_millis(DEBOUNCE_MS) {
+                        if !pending.is_empty()
+                            && last_event.elapsed() >= Duration::from_millis(DEBOUNCE_MS)
+                        {
                             let batch: Vec<PathBuf> = pending.drain().collect();
                             for path in batch {
                                 on_change(pid.clone(), path);
@@ -68,7 +73,12 @@ impl FileWatcher {
             }
         });
 
-        Ok(Self { project_id: project_id.to_string(), root: root.to_path_buf(), watcher: Some(watcher), running })
+        Ok(Self {
+            project_id: project_id.to_string(),
+            root: root.to_path_buf(),
+            watcher: Some(watcher),
+            running,
+        })
     }
 
     pub fn stop(&mut self) {
@@ -88,7 +98,11 @@ impl FileWatcher {
 
 fn is_supported(path: &Path) -> bool {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        if name.starts_with('.') || name.starts_with('~') || name.ends_with('~') || name.contains(".swp") {
+        if name.starts_with('.')
+            || name.starts_with('~')
+            || name.ends_with('~')
+            || name.contains(".swp")
+        {
             return false;
         }
     }
