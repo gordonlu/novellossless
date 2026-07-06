@@ -1,27 +1,8 @@
-import {
-  AlertTriangle,
-  Archive,
-  BookOpenText,
-  CheckCircle2,
-  ChevronRight,
-  Clock3,
-  Database,
-  FileSearch,
-  FolderOpen,
-  Home,
-  ListChecks,
-  LockKeyhole,
-  Network,
-  Plus,
-  RefreshCw,
-  Search,
-  ShieldCheck,
-  Sparkles,
-  UserRound,
-} from "lucide-react";
+import { AlertTriangle, Archive, BookOpenText, CheckCircle2, Clock3, Database, Home, LockKeyhole, Network, RefreshCw, Search, ShieldCheck, UserRound } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { clsx } from "clsx";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { Link, Route, Routes, useLocation } from "react-router-dom";
 import {
   buildContextPack,
   ContinuityIssue,
@@ -51,6 +32,16 @@ import {
   updateForeshadowStatus,
   updateIssueStatus,
 } from "./tauri";
+import { basename, formatError, plainSnippet } from "./lib/helpers";
+import { ContentView } from "./routes/ContentView";
+import { ContextPack as ContextPackRoute } from "./routes/ContextPack";
+import { Characters } from "./routes/Characters";
+import { Dashboard as DashboardRoute } from "./routes/Dashboard";
+import { Foreshadows } from "./routes/Foreshadows";
+import { Issues } from "./routes/Issues";
+import { Privacy } from "./routes/Privacy";
+import { SearchView } from "./routes/SearchView";
+import { Timeline } from "./routes/Timeline";
 
 const demoProject: Project = {
   id: "demo",
@@ -61,15 +52,15 @@ const demoProject: Project = {
 };
 
 const navigation = [
-  { label: "项目首页", icon: Home, active: true },
-  { label: "正文", icon: BookOpenText },
-  { label: "搜索", icon: Search },
-  { label: "人物", icon: UserRound },
-  { label: "伏笔", icon: Network },
-  { label: "时间线", icon: Clock3 },
-  { label: "冲突报告", icon: AlertTriangle },
-  { label: "上下文包", icon: Archive },
-  { label: "隐私中心", icon: LockKeyhole },
+  { label: "项目首页", icon: Home, path: "/" },
+  { label: "正文", icon: BookOpenText, path: "/content" },
+  { label: "搜索", icon: Search, path: "/search" },
+  { label: "人物", icon: UserRound, path: "/characters" },
+  { label: "伏笔", icon: Network, path: "/foreshadows" },
+  { label: "时间线", icon: Clock3, path: "/timeline" },
+  { label: "冲突报告", icon: AlertTriangle, path: "/issues" },
+  { label: "上下文包", icon: Archive, path: "/context-pack" },
+  { label: "隐私中心", icon: LockKeyhole, path: "/privacy" },
 ];
 
 const emptySummary: ProjectSummary = {
@@ -189,6 +180,7 @@ type BusyState = "idle" | "loading" | "import" | "scan" | "search" | "context";
 type RuntimeMode = "desktop" | "preview";
 
 export function App() {
+  const location = useLocation();
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(
     isDesktopRuntime() ? "desktop" : "preview",
   );
@@ -262,18 +254,6 @@ export function App() {
   const statusLabel = hasRealProject ? "本地项目" : runtimeMode === "preview" ? "界面预览" : "等待导入";
   const selectedRootLabel = hasRealProject ? basename(selectedProject.rootPath) : "尚未选择目录";
   const scanReady = hasRealProject;
-
-  const metrics = useMemo(
-    () => [
-      { label: "正文文件", value: dashboard.summary.documentCount, suffix: "份" },
-      { label: "文本片段", value: dashboard.summary.chunkCount, suffix: "段" },
-      { label: "总字数", value: dashboard.summary.totalWords, suffix: "字" },
-      { label: "记忆候选", value: totalCandidateCount(dashboard), suffix: "条" },
-      { label: "伏笔候选", value: dashboard.foreshadowCandidates, suffix: "条" },
-      { label: "待看问题", value: dashboard.issueCount, suffix: "条" },
-    ],
-    [dashboard],
-  );
 
   async function loadGlobalP0() {
     const [privacyStatus, profileItems] = await Promise.all([getPrivacyStatus(), listProfiles()]);
@@ -584,14 +564,14 @@ export function App() {
 
         <nav className="nav-list">
           {navigation.map((item) => (
-            <button
-              type="button"
-              className={clsx("nav-item", item.active && "nav-item-active")}
+            <Link
+              to={item.path}
+              className={clsx("nav-item", location.pathname === item.path && "nav-item-active")}
               key={item.label}
             >
               <item.icon size={17} />
               <span>{item.label}</span>
-            </button>
+            </Link>
           ))}
         </nav>
 
@@ -657,431 +637,56 @@ export function App() {
           {error && <div className="error">{error}</div>}
         </section>
 
-        <section className="content-grid">
-          <div className="primary-column">
-            <section className="panel import-panel">
-              <div className="panel-heading">
-                <div>
-                  <h2>项目导入与扫描</h2>
-                  <p>选择小说目录后，novellossless 只扫描该目录内的 TXT 和 Markdown。</p>
-                </div>
-                <FolderOpen size={22} />
-              </div>
-
-              <div className="import-form">
-                <label>
-                  项目名称
-                  <input
-                    value={projectName}
-                    onChange={(event) => setProjectName(event.target.value)}
-                    placeholder="例如：雨巷钟声"
-                  />
-                </label>
-                <label className="path-field">
-                  小说目录
-                  <div className="path-row">
-                    <input
-                      value={folderPath}
-                      onChange={(event) => setFolderPath(event.target.value)}
-                      placeholder="选择或粘贴本地目录"
-                    />
-                    <button type="button" className="secondary-button" onClick={chooseFolder}>
-                      <FolderOpen size={16} />
-                      浏览
-                    </button>
-                  </div>
-                </label>
-              </div>
-
-              <div className="action-row">
-                <button
-                  type="button"
-                  className="primary-button"
-                  onClick={handleImport}
-                  disabled={busy !== "idle" || runtimeMode === "preview"}
-                >
-                  <Plus size={16} />
-                  {busy === "import" ? "正在导入" : "导入项目"}
-                </button>
-                <button
-                  type="button"
-                  className="secondary-button strong"
-                  onClick={handleScan}
-                  disabled={!scanReady || busy !== "idle"}
-                >
-                  <RefreshCw size={16} />
-                  {busy === "scan" ? "正在扫描" : "开始扫描"}
-                </button>
-              </div>
-
-              {lastScan && (
-                <div className="scan-summary">
-                  <CheckCircle2 size={16} />
-                  <span>
-                    本次读取 {lastScan.scannedDocuments} 份文件，跳过 {lastScan.skippedFiles} 份。
-                  </span>
-                </div>
-              )}
-            </section>
-
-            <section className="metric-grid six">
-              {metrics.map((metric) => (
-                <div className="metric-card" key={metric.label}>
-                  <span>{metric.label}</span>
-                  <strong>
-                    {metric.value.toLocaleString()}
-                    <small>{metric.suffix}</small>
-                  </strong>
-                </div>
-              ))}
-            </section>
-
-            <section className="panel search-panel">
-              <div className="panel-heading compact">
-                <div>
-                  <h2>全文搜索</h2>
-                  <p>搜索正文片段，并保留可回溯的章节证据。</p>
-                </div>
-                <FileSearch size={22} />
-              </div>
-
-              <div className="search-row">
-                <Search size={18} />
-                <input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      runSearch();
-                    }
-                  }}
-                  placeholder="输入人物、物件、地点或句子"
-                />
-                <button type="button" onClick={() => runSearch()} disabled={busy !== "idle"}>
-                  {busy === "search" ? "搜索中" : "搜索"}
-                </button>
-              </div>
-
-              <div className="results-list">
-                {hits.length > 0 ? (
-                  hits.map((hit) => (
-                    <button
-                      type="button"
-                      key={hit.chunkId}
-                      className={clsx(
-                        "result-item",
-                        selectedHit?.chunkId === hit.chunkId && "result-item-active",
-                      )}
-                      onClick={() => setSelectedHit(hit)}
-                    >
-                      <div>
-                        <strong>{hit.title}</strong>
-                        <span className="result-meta">{sourceLabel(hit)}</span>
-                        <p>{renderSnippet(hit.snippet)}</p>
-                      </div>
-                      <ChevronRight size={17} />
-                    </button>
-                  ))
-                ) : (
-                  <div className="empty-state">
-                    <strong>{searchAttempted ? "没有找到匹配片段" : "等待搜索"}</strong>
-                    <p>
-                      {hasRealProject
-                        ? "输入人物、物件、地点或原文句子后，可在右侧查看来源证据。"
-                        : "导入项目后会搜索真实正文；当前仅用于界面预览。"}
-                    </p>
-                  </div>
-                )}
-              </div>
-            </section>
-
-            <section className="p0-grid">
-              <section className="panel p0-panel">
-                <div className="panel-heading compact">
-                  <div>
-                    <h2>记忆候选</h2>
-                    <p>这些是系统从正文里提到的人物、地点和物件候选，尚不是事实。</p>
-                  </div>
-                  <UserRound size={22} />
-                </div>
-                <div className="compact-list">
-                  {candidates.length > 0 ? (
-                    candidates.slice(0, 6).map((candidate) => (
-                      <article className="compact-item" key={candidate.id}>
-                        <div>
-                          <strong>
-                            {candidate.name}
-                            <span>{candidateTypeLabel(candidate.nodeType)}</span>
-                          </strong>
-                          <p>
-                            出现 {candidate.occurrenceCount} 次 · {candidate.sourcePath} ·{" "}
-                            {candidate.sourceTitle}
-                          </p>
-                        </div>
-                        <StatusButtons
-                          onConfirm={() => handleStatus("candidate", candidate.id, "confirmed")}
-                          onDismiss={() => handleStatus("candidate", candidate.id, "false_positive")}
-                        />
-                      </article>
-                    ))
-                  ) : (
-                    <div className="empty-state small">扫描后会显示人物、地点和物件候选。</div>
-                  )}
-                </div>
-              </section>
-
-              <section className="panel p0-panel">
-                <div className="panel-heading compact">
-                  <div>
-                    <h2>伏笔候选</h2>
-                    <p>只记录明显线索或承诺，避免把推测当成结论。</p>
-                  </div>
-                  <Network size={22} />
-                </div>
-                <div className="compact-list">
-                  {foreshadows.length > 0 ? (
-                    foreshadows.slice(0, 5).map((item) => (
-                      <article className="compact-item" key={item.id}>
-                        <div>
-                          <strong>{item.title}</strong>
-                          <p>
-                            {riskLabel(item.riskLevel)} · {item.sourcePath} · {item.evidence}
-                          </p>
-                        </div>
-                        <StatusButtons
-                          onConfirm={() => handleStatus("foreshadow", item.id, "confirmed")}
-                          onDismiss={() => handleStatus("foreshadow", item.id, "false_positive")}
-                        />
-                      </article>
-                    ))
-                  ) : (
-                    <div className="empty-state small">扫描后会显示显式线索和承诺。</div>
-                  )}
-                </div>
-              </section>
-
-              <section className="panel p0-panel">
-                <div className="panel-heading compact">
-                  <div>
-                    <h2>基础问题</h2>
-                    <p>低打扰展示，需要作者确认后才进入修订处理。</p>
-                  </div>
-                  <AlertTriangle size={22} />
-                </div>
-                <div className="compact-list">
-                  {issues.length > 0 ? (
-                    issues.slice(0, 5).map((issue) => (
-                      <article className="compact-item issue" key={issue.id}>
-                        <div>
-                          <strong>
-                            {issue.title}
-                            <span>{severityLabel(issue.severity)}</span>
-                          </strong>
-                          <p>{issue.description}</p>
-                        </div>
-                        <StatusButtons
-                          onConfirm={() => handleStatus("issue", issue.id, "resolved")}
-                          onDismiss={() => handleStatus("issue", issue.id, "false_positive")}
-                        />
-                      </article>
-                    ))
-                  ) : (
-                    <div className="empty-state small">扫描后会显示重复表达和明确属性冲突。</div>
-                  )}
-                </div>
-              </section>
-
-              <section className="panel p0-panel context-panel">
-                <div className="panel-heading compact">
-                  <div>
-                    <h2>上下文包</h2>
-                    <p>根据当前搜索词生成 Markdown，所有内容保留来源。</p>
-                  </div>
-                  <Archive size={22} />
-                </div>
-                <button
-                  type="button"
-                  className="secondary-button strong"
-                  onClick={handleBuildContextPack}
-                  disabled={busy !== "idle"}
-                >
-                  <Archive size={16} />
-                  {busy === "context" ? "正在生成" : "生成上下文包"}
-                </button>
-                {contextPack && <pre className="context-preview">{contextPack.content}</pre>}
-              </section>
-            </section>
-          </div>
-
-          <aside className="inspector">
-            <section className="panel evidence-panel">
-              <div className="panel-heading compact">
-                <div>
-                  <h2>来源证据</h2>
-                  <p>所有提醒都必须能回到正文。</p>
-                </div>
-                <ListChecks size={22} />
-              </div>
-
-              <div className="evidence-source">{selectedHit?.title ?? "未选择片段"}</div>
-              {selectedHit && (
-                <div className="evidence-meta">
-                  <div>
-                    <span>来源文件</span>
-                    <strong>{selectedHit.documentPath}</strong>
-                  </div>
-                  <div>
-                    <span>片段位置</span>
-                    <strong>
-                      第 {selectedHit.chunkIndex + 1} 段 · {selectedHit.startOffset}-{selectedHit.endOffset}
-                    </strong>
-                  </div>
-                </div>
-              )}
-              <blockquote>{selectedHit ? plainSnippet(selectedHit.snippet) : "选择搜索结果后查看来源。"}</blockquote>
-
-              <div className="evidence-actions">
-                <button
-                  type="button"
-                  className="primary-button full"
-                  disabled={!selectedHit}
-                  onClick={revealSelectedSource}
-                >
-                  查看来源
-                </button>
-                <button type="button" className="secondary-button full" disabled={!selectedHit}>
-                  标记误报
-                </button>
-                <button type="button" className="secondary-button full" disabled={!selectedHit}>
-                  创建任务
-                </button>
-              </div>
-            </section>
-
-            <section className="panel risk-panel">
-              <div className="risk-header">
-                <AlertTriangle size={18} />
-                <span>今日重点</span>
-              </div>
-              <div className="risk-item amber">
-                <strong>{issues.length > 0 ? "有待确认问题" : "等待扫描"}</strong>
-                <p>
-                  {issues.length > 0
-                    ? `当前有 ${issues.length} 条基础问题需要确认。`
-                    : "导入并扫描项目后，这里会显示高风险一致性问题。"}
-                </p>
-              </div>
-              <div className="risk-item teal">
-                <strong>上下文准备</strong>
-                <p>搜索片段可以作为后续上下文包的证据来源。</p>
-              </div>
-            </section>
-
-            <section className="panel privacy-panel">
-              <div className="panel-heading compact">
-                <div>
-                  <h2>隐私中心</h2>
-                  <p>默认只使用本机数据。</p>
-                </div>
-                <LockKeyhole size={22} />
-              </div>
-              <div className="privacy-list">
-                <PrivacyRow label="离线模式" value={privacy.offlineMode ? "开启" : "关闭"} />
-                <PrivacyRow label="AI 增强" value={privacy.aiEnabled ? "开启" : "关闭"} />
-                <PrivacyRow label="上传正文" value={privacy.uploadsEnabled ? "允许" : "不允许"} />
-                <PrivacyRow label="剪贴板读取" value={privacy.clipboardAccess ? "允许" : "不读取"} />
-                <PrivacyRow label="本地存储" value={privacy.storageMode} />
-                <PrivacyRow label="数据库" value={basename(privacy.databasePath)} />
-              </div>
-            </section>
-
-            <section className="panel mode-panel">
-              <div className="mode-icon">
-                <Sparkles size={18} />
-              </div>
-              <div>
-                <strong>{profiles[0]?.name ?? "通用长篇模式"}</strong>
-                <p>{profiles[0]?.description || "已启用章节识别、全文搜索、证据保留。"}</p>
-              </div>
-            </section>
-          </aside>
-        </section>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <DashboardRoute
+                projectName={projectName}
+                setProjectName={setProjectName}
+                folderPath={folderPath}
+                setFolderPath={setFolderPath}
+                dashboard={dashboard}
+                candidates={candidates}
+                foreshadows={foreshadows}
+                issues={issues}
+                query={query}
+                setQuery={setQuery}
+                hits={hits}
+                selectedHit={selectedHit}
+                setSelectedHit={setSelectedHit}
+                contextPack={contextPack}
+                searchAttempted={searchAttempted}
+                lastScan={lastScan}
+                busy={busy}
+                runtimeMode={runtimeMode}
+                hasRealProject={hasRealProject}
+                error={error}
+                privacy={privacy}
+                profiles={profiles}
+                chooseFolder={chooseFolder}
+                handleImport={handleImport}
+                handleScan={handleScan}
+                runSearch={runSearch}
+                handleBuildContextPack={handleBuildContextPack}
+                handleStatus={handleStatus}
+                revealSelectedSource={revealSelectedSource}
+              />
+            }
+          />
+          <Route path="/content" element={<ContentView />} />
+          <Route path="/search" element={<SearchView />} />
+          <Route path="/characters" element={<Characters />} />
+          <Route path="/foreshadows" element={<Foreshadows />} />
+          <Route path="/timeline" element={<Timeline />} />
+          <Route path="/issues" element={<Issues />} />
+          <Route path="/context-pack" element={<ContextPackRoute />} />
+          <Route
+            path="/privacy"
+            element={<Privacy privacy={privacy} />}
+          />
+        </Routes>
       </main>
     </div>
   );
-}
-
-function StatusButtons({ onConfirm, onDismiss }: { onConfirm: () => void; onDismiss: () => void }) {
-  return (
-    <div className="status-actions">
-      <button type="button" onClick={onConfirm}>
-        确认
-      </button>
-      <button type="button" onClick={onDismiss}>
-        误报
-      </button>
-    </div>
-  );
-}
-
-function PrivacyRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="privacy-row">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function totalCandidateCount(dashboard: Dashboard) {
-  return dashboard.personCandidates + dashboard.placeCandidates + dashboard.itemCandidates;
-}
-
-function basename(path: string) {
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-}
-
-function formatError(reason: unknown) {
-  const message = reason instanceof Error ? reason.message : String(reason);
-  return message.startsWith("操作失败") ? message : `操作失败：${message}`;
-}
-
-function candidateTypeLabel(nodeType: string) {
-  if (nodeType === "person") return "人物";
-  if (nodeType === "place") return "地点";
-  if (nodeType === "item") return "物件";
-  return "候选";
-}
-
-function riskLabel(risk: string) {
-  if (risk === "high") return "高风险";
-  if (risk === "medium") return "中风险";
-  if (risk === "low") return "低风险";
-  return "待确认";
-}
-
-function severityLabel(severity: string) {
-  if (severity === "serious") return "严重";
-  if (severity === "high") return "高";
-  if (severity === "medium") return "中";
-  if (severity === "low") return "低";
-  return "信息";
-}
-
-function sourceLabel(hit: SearchHit) {
-  return `${hit.documentPath} · 第 ${hit.chunkIndex + 1} 段`;
-}
-
-function plainSnippet(snippet: string) {
-  return snippet.replace(/\[/g, "").replace(/\]/g, "");
-}
-
-function renderSnippet(snippet: string) {
-  const segments = snippet.split(/(\[[^\]]+\])/g);
-  return segments.map((segment, index) => {
-    if (segment.startsWith("[") && segment.endsWith("]")) {
-      return <mark key={`${segment}-${index}`}>{segment.slice(1, -1)}</mark>;
-    }
-    return <span key={`${segment}-${index}`}>{segment}</span>;
-  });
 }
