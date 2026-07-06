@@ -60,8 +60,8 @@ export function Issues({ projectId }: Props) {
           </div>
         </section>
       </div>
-      <aside className="inspector">
-        {selected ? (
+      {selected ? (
+        <aside className="inspector">
           <section className="panel">
             <div className="panel-heading compact"><h2>详情</h2><AlertTriangle size={22} /></div>
             <div className="evidence-meta">
@@ -71,10 +71,10 @@ export function Issues({ projectId }: Props) {
             </div>
             <blockquote>{selected.description}</blockquote>
           </section>
-        ) : (
-          <InspectorPanel selectedHit={null} />
-        )}
-      </aside>
+        </aside>
+      ) : (
+        <InspectorPanel selectedHit={null} />
+      )}
     </section>
   );
 }

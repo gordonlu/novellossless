@@ -55,8 +55,8 @@ export function Characters({ projectId }: Props) {
           </div>
         </section>
       </div>
-      <aside className="inspector">
-        {selected ? (
+      {selected ? (
+        <aside className="inspector">
           <section className="panel">
             <div className="panel-heading compact">
               <h2>{selected.name}</h2>
@@ -72,10 +72,10 @@ export function Characters({ projectId }: Props) {
             </div>
             <blockquote>{selected.sourceSnippet}</blockquote>
           </section>
-        ) : (
-          <InspectorPanel selectedHit={null} />
-        )}
-      </aside>
+        </aside>
+      ) : (
+        <InspectorPanel selectedHit={null} />
+      )}
     </section>
   );
 }

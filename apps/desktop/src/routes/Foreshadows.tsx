@@ -59,8 +59,8 @@ export function Foreshadows({ projectId }: Props) {
           </div>
         </section>
       </div>
-      <aside className="inspector">
-        {selected ? (
+      {selected ? (
+        <aside className="inspector">
           <section className="panel">
             <div className="panel-heading compact"><h2>详情</h2><Network size={22} /></div>
             <div className="evidence-meta">
@@ -72,10 +72,10 @@ export function Foreshadows({ projectId }: Props) {
             </div>
             <blockquote>{selected.evidence}</blockquote>
           </section>
-        ) : (
-          <InspectorPanel selectedHit={null} />
-        )}
-      </aside>
+        </aside>
+      ) : (
+        <InspectorPanel selectedHit={null} />
+      )}
     </section>
   );
 }

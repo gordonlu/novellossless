@@ -1,9 +1,17 @@
 use super::extractor::{ChunkInfo, Extraction, Extractor, NarrativeNodeCandidate};
+use crate::profile::PeopleConfig;
 use regex::Regex;
 use std::collections::BTreeMap;
 
-#[derive(Default)]
-pub struct PersonExtractor;
+pub struct PersonExtractor {
+    pub people_config: PeopleConfig,
+}
+
+impl PersonExtractor {
+    pub fn new(people_config: PeopleConfig) -> Self {
+        Self { people_config }
+    }
+}
 
 impl Extractor for PersonExtractor {
     fn name(&self) -> &'static str {
@@ -23,7 +31,7 @@ impl Extractor for PersonExtractor {
                         continue;
                     };
                     let name = normalize_name(raw);
-                    if !is_valid_person_name(&name) {
+                    if !self.is_valid_person_name(&name) {
                         continue;
                     }
                     seen.entry(name.clone())
@@ -41,7 +49,9 @@ impl Extractor for PersonExtractor {
             }
         }
 
-        self.merge_aliases(&mut seen, chunks);
+        if self.people_config.enable_alias_detection {
+            self.merge_aliases(&mut seen, chunks);
+        }
 
         seen.into_iter()
             .filter(|(_, acc)| acc.count >= 1)
@@ -71,6 +81,19 @@ struct CandidateAccumulator {
 }
 
 impl PersonExtractor {
+    fn is_valid_person_name(&self, name: &str) -> bool {
+        let stopwords = [
+            "自己", "什么", "这里", "那里", "哪里", "这个", "那个", "他们", "我们", "你们", "没有",
+            "不是", "已经", "突然",
+        ];
+        let len = name.chars().count();
+        len >= self.people_config.min_name_length as usize
+            && len <= self.people_config.max_name_length as usize
+            && !stopwords.contains(&name)
+            && !name.ends_with("里")
+            && !name.ends_with("中")
+    }
+
     fn merge_aliases(
         &self,
         seen: &mut BTreeMap<String, CandidateAccumulator>,
@@ -125,13 +148,4 @@ fn normalize_name(raw: &str) -> String {
     .to_string()
 }
 
-fn is_valid_person_name(name: &str) -> bool {
-    let stopwords = [
-        "自己", "什么", "这里", "那里", "哪里", "这个", "那个", "他们", "我们", "你们", "没有",
-        "不是", "已经", "突然",
-    ];
-    name.chars().count() >= 2
-        && !stopwords.contains(&name)
-        && !name.ends_with("里")
-        && !name.ends_with("中")
-}
+

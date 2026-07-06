@@ -893,6 +893,80 @@ blockquote {
   font-size: 12px;
 }
 
+.doc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.doc-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #24231f;
+  font-size: 13px;
+  text-align: left;
+}
+
+.doc-item small {
+  margin-left: auto;
+  color: #817a70;
+  font-size: 11px;
+}
+
+.doc-item-active {
+  background: #e8e3d9;
+}
+
+.chunk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e2dccf;
+}
+
+.chunk-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #24231f;
+  font-size: 12px;
+  text-align: left;
+}
+
+.chunk-item svg {
+  margin-left: auto;
+  color: #b5ae9e;
+}
+
+.chunk-item-active {
+  background: #e8e3d9;
+}
+
+.content-text {
+  padding: 12px;
+  border: 1px solid #e2dccf;
+  border-radius: 8px;
+  background: #fffefb;
+  white-space: pre-wrap;
+  line-height: 1.7;
+  font-size: 14px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
 @media (max-width: 1180px) {
   body {
     overflow: auto;

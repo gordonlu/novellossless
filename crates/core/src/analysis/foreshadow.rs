@@ -1,6 +1,7 @@
 use super::extractor::{ChunkInfo, Extraction, Extractor, ForeshadowCandidate};
 use regex::Regex;
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
 #[derive(Default)]
 pub struct ForeshadowExtractor;
@@ -45,8 +46,7 @@ impl Extractor for ForeshadowExtractor {
                     acc.latest_chunk = chunk.clone();
                     acc.mention_count += 1;
 
-                    let name_pattern = Regex::new(r"([\p{Han}]{2,4})").unwrap();
-                    for cap in name_pattern.captures_iter(&sentence) {
+                    for cap in name_pattern().captures_iter(&sentence) {
                         let n = cap.get(1).unwrap().as_str().to_string();
                         if n.chars().count() >= 2 {
                             acc.related_names.push(n);
@@ -97,6 +97,11 @@ fn calculate_risk(chapter_gap: i64, mention_count: i64) -> &'static str {
     } else {
         "low"
     }
+}
+
+fn name_pattern() -> &'static Regex {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| Regex::new(r"([\p{Han}]{2,4})").unwrap())
 }
 
 fn split_sentences(content: &str) -> Vec<String> {

@@ -399,7 +399,7 @@ impl NovelCore {
         let rules = &self.extractor_rules;
 
         if rules.people {
-            extractors.push(Box::new(PersonExtractor::default()));
+            extractors.push(Box::new(PersonExtractor::new(self.people_config.clone())));
         }
         if rules.places {
             extractors.push(Box::new(PlaceExtractor::default()));
