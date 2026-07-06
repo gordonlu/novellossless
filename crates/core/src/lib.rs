@@ -3,6 +3,8 @@ mod profile;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
+use crate::profile::{ExtractorRules, PeopleConfig, ProfileConfig};
+
 use anyhow::{Context, Result};
 use novellossless_parser::parse_document;
 use novellossless_storage::{
@@ -17,6 +19,9 @@ use walkdir::WalkDir;
 
 pub struct NovelCore {
     storage: Storage,
+    profiles: Vec<ProfileConfig>,
+    extractor_rules: ExtractorRules,
+    people_config: PeopleConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,13 +91,28 @@ impl CandidateKind {
 
 impl NovelCore {
     pub fn open(db_path: &Path) -> Result<Self> {
+        let storage = Storage::open(db_path)?;
+        let profiles_root = find_profiles_root();
+        let profiles = load_profiles_from(&profiles_root);
+        let analysis_rules = profile::load_analysis_rules(&profiles_root);
         Ok(Self {
-            storage: Storage::open(db_path)?,
+            storage,
+            profiles,
+            extractor_rules: analysis_rules.extractors,
+            people_config: analysis_rules.people,
         })
     }
 
     pub fn from_storage(storage: Storage) -> Self {
-        Self { storage }
+        let profiles_root = find_profiles_root();
+        let profiles = load_profiles_from(&profiles_root);
+        let analysis_rules = profile::load_analysis_rules(&profiles_root);
+        Self {
+            storage,
+            profiles,
+            extractor_rules: analysis_rules.extractors,
+            people_config: analysis_rules.people,
+        }
     }
 
     pub fn import_project(&self, name: &str, root_path: &Path) -> Result<Project> {
@@ -139,8 +159,11 @@ impl NovelCore {
         let mut scanned_documents = 0;
         let mut skipped_files = 0;
 
+        let profile = self.profiles.first();
+        let enable_chunking = profile.map(|p| p.rules.chapter_recognition).unwrap_or(true);
+
         for file in files {
-            match self.scan_file(&project, &root, &file) {
+            match self.scan_file(&project, &root, &file, enable_chunking) {
                 Ok(()) => scanned_documents += 1,
                 Err(_) => skipped_files += 1,
             }
@@ -263,28 +286,45 @@ impl NovelCore {
         }
     }
 
-    pub fn load_profiles(&self, profiles_root: &Path) -> Result<Vec<ProfileInfo>> {
-        let common = profiles_root.join("common_longform").join("profile.toml");
-        if !common.exists() {
-            return Ok(Vec::new());
-        }
-
-        let content = std::fs::read_to_string(&common)
-            .with_context(|| format!("failed to read {}", common.display()))?;
-        Ok(vec![ProfileInfo {
-            id: profile_value(&content, "id").unwrap_or_else(|| "common_longform".to_string()),
-            name: profile_value(&content, "name").unwrap_or_else(|| "通用长篇".to_string()),
-            version: profile_value(&content, "version").unwrap_or_else(|| "0.1.0".to_string()),
-            description: profile_value(&content, "description").unwrap_or_default(),
-        }])
+    pub fn load_profiles(&self, _profiles_root: &Path) -> Result<Vec<ProfileInfo>> {
+        Ok(self
+            .profiles
+            .iter()
+            .map(|p| ProfileInfo {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                version: "0.1.0".to_string(),
+                description: String::new(),
+            })
+            .collect())
     }
 
-    fn scan_file(&self, project: &Project, root: &Path, file: &Path) -> Result<()> {
+    fn scan_file(
+        &self,
+        project: &Project,
+        root: &Path,
+        file: &Path,
+        enable_chunking: bool,
+    ) -> Result<()> {
         let parsed = parse_document(file)?;
         let relative_path = relative_document_path(root, file);
         let kind = document_kind(file);
-        let chunks = parsed
-            .chapters
+
+        let chapters = if enable_chunking {
+            parsed.chapters
+        } else {
+            vec![parsed.chapters.into_iter().next().unwrap_or_else(|| {
+                novellossless_parser::Chapter {
+                    index: 0,
+                    title: parsed.title.clone(),
+                    start_offset: 0,
+                    end_offset: parsed.content.len(),
+                    content: parsed.content.clone(),
+                }
+            })]
+        };
+
+        let chunks = chapters
             .iter()
             .map(|chapter| NewChunk {
                 chunk_index: chapter.index as i64,
@@ -316,11 +356,33 @@ impl NovelCore {
 
     fn analyze_project(&self, project_id: &str) -> Result<AnalysisReport> {
         let chunks = self.storage.project_chunks(project_id)?;
-        let people = extract_candidates(&chunks, CandidateKind::Person)?;
-        let places = extract_candidates(&chunks, CandidateKind::Place)?;
-        let items = extract_candidates(&chunks, CandidateKind::Item)?;
-        let foreshadows = extract_foreshadows(&chunks);
-        let issues = extract_issues(&chunks)?;
+        let rules = &self.extractor_rules;
+
+        let people = if rules.people {
+            extract_candidates(&chunks, CandidateKind::Person)?
+        } else {
+            Vec::new()
+        };
+        let places = if rules.places {
+            extract_candidates(&chunks, CandidateKind::Place)?
+        } else {
+            Vec::new()
+        };
+        let items = if rules.items {
+            extract_candidates(&chunks, CandidateKind::Item)?
+        } else {
+            Vec::new()
+        };
+        let foreshadows = if rules.foreshadows {
+            extract_foreshadows(&chunks)
+        } else {
+            Vec::new()
+        };
+        let issues = if rules.eye_color_conflicts || rules.repeat_expressions {
+            extract_issues(&chunks)?
+        } else {
+            Vec::new()
+        };
 
         self.storage.upsert_narrative_nodes(project_id, &people)?;
         self.storage.upsert_narrative_nodes(project_id, &places)?;
@@ -767,14 +829,30 @@ fn plain_snippet(snippet: &str) -> String {
     snippet.replace(['[', ']'], "")
 }
 
-fn profile_value(content: &str, key: &str) -> Option<String> {
-    content.lines().find_map(|line| {
-        let (line_key, value) = line.split_once('=')?;
-        if line_key.trim() != key {
-            return None;
+fn find_profiles_root() -> PathBuf {
+    if let Ok(current_dir) = std::env::current_dir() {
+        for ancestor in current_dir.ancestors() {
+            let candidate = ancestor.join("profiles");
+            if candidate.join("common_longform").join("profile.toml").exists() {
+                return candidate;
+            }
         }
-        Some(value.trim().trim_matches('"').to_string())
-    })
+    }
+    PathBuf::from("profiles")
+}
+
+fn load_profiles_from(profiles_root: &Path) -> Vec<ProfileConfig> {
+    let common = profiles_root.join("common_longform").join("profile.toml");
+    if !common.exists() {
+        return Vec::new();
+    }
+    let content = match std::fs::read_to_string(&common) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    toml::from_str::<ProfileConfig>(&content)
+        .map(|p| vec![p])
+        .unwrap_or_default()
 }
 
 #[derive(Debug)]
