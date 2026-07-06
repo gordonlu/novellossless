@@ -674,7 +674,7 @@ export function App() {
               />
             }
           />
-          <Route path="/content" element={<ContentView />} />
+          <Route path="/content" element={<ContentView projectId={selectedProject.id} />} />
           <Route path="/search" element={<SearchView />} />
           <Route path="/characters" element={<Characters projectId={selectedProject.id} />} />
           <Route path="/foreshadows" element={<Foreshadows projectId={selectedProject.id} />} />

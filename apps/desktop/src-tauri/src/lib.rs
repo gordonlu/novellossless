@@ -1,8 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use novellossless_core::{Dashboard, NovelCore, PrivacyStatus, ProfileInfo, ScanReport};
+use novellossless_core::{
+    Dashboard, DocumentTree, NovelCore, PrivacyStatus, ProfileInfo, ScanReport,
+};
 use novellossless_storage::{
-    ContextPack, ContinuityIssue, ForeshadowItem, NarrativeNode, Project, ProjectSummary, SearchHit,
+    ContextPack, ContinuityIssue, ForeshadowItem, NarrativeNode, Project, ProjectChunk,
+    ProjectSummary, SearchHit,
 };
 use serde::Serialize;
 use tauri::Manager;
@@ -145,6 +148,35 @@ struct ProfileInfoDto {
     name: String,
     version: String,
     description: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentDto {
+    id: String,
+    path: String,
+    title: String,
+    chapter_count: i64,
+    word_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChunkDto {
+    id: String,
+    document_id: String,
+    chunk_index: i64,
+    title: String,
+    content: String,
+    start_offset: i64,
+    word_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentTreeDto {
+    documents: Vec<DocumentDto>,
+    chunks: Vec<ChunkDto>,
 }
 
 #[tauri::command]
@@ -298,6 +330,17 @@ fn list_profiles(app: tauri::AppHandle) -> Result<Vec<ProfileInfoDto>, String> {
         .map_err(to_command_error)
 }
 
+#[tauri::command]
+fn get_document_chunks(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<DocumentTreeDto, String> {
+    let core = open_core(&app)?;
+    core.document_tree(&project_id, None)
+        .map(DocumentTreeDto::from)
+        .map_err(to_command_error)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -317,7 +360,8 @@ pub fn run() {
             build_context_pack,
             get_project_summary,
             get_privacy_status,
-            list_profiles
+            list_profiles,
+            get_document_chunks
         ])
         .run(tauri::generate_context!())
         .expect("failed to run novellossless desktop app");
@@ -512,6 +556,41 @@ impl From<ProfileInfo> for ProfileInfoDto {
             name: profile.name,
             version: profile.version,
             description: profile.description,
+        }
+    }
+}
+
+impl From<DocumentTree> for DocumentTreeDto {
+    fn from(tree: DocumentTree) -> Self {
+        Self {
+            documents: tree.documents.into_iter().map(DocumentDto::from).collect(),
+            chunks: tree.chunks.into_iter().map(ChunkDto::from).collect(),
+        }
+    }
+}
+
+impl From<novellossless_core::DocumentInfo> for DocumentDto {
+    fn from(info: novellossless_core::DocumentInfo) -> Self {
+        Self {
+            id: info.id,
+            path: info.path,
+            title: info.title,
+            chapter_count: info.chapter_count,
+            word_count: info.word_count,
+        }
+    }
+}
+
+impl From<ProjectChunk> for ChunkDto {
+    fn from(chunk: ProjectChunk) -> Self {
+        Self {
+            id: chunk.chunk_id,
+            document_id: chunk.document_id,
+            chunk_index: chunk.chunk_index,
+            title: chunk.title,
+            content: chunk.content,
+            start_offset: chunk.start_offset,
+            word_count: chunk.word_count,
         }
     }
 }

@@ -14,7 +14,8 @@ use anyhow::{Context, Result};
 use novellossless_parser::parse_document;
 use novellossless_storage::{
     ContextPack, ContinuityIssue, ForeshadowItem, NarrativeNode, NewChunk, NewContinuityIssue,
-    NewDocument, NewForeshadowItem, NewNarrativeNode, Project, ProjectSummary, SearchHit, Storage,
+    NewDocument, NewForeshadowItem, NewNarrativeNode, Project, ProjectChunk, ProjectSummary,
+    SearchHit, Storage,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -73,6 +74,21 @@ pub struct ProfileInfo {
     pub name: String,
     pub version: String,
     pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentInfo {
+    pub id: String,
+    pub path: String,
+    pub title: String,
+    pub chapter_count: i64,
+    pub word_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentTree {
+    pub documents: Vec<DocumentInfo>,
+    pub chunks: Vec<ProjectChunk>,
 }
 
 impl NovelCore {
@@ -186,6 +202,29 @@ impl NovelCore {
 
     pub fn list_issues(&self, project_id: &str, limit: i64) -> Result<Vec<ContinuityIssue>> {
         self.storage.list_continuity_issues(project_id, limit)
+    }
+
+    pub fn document_tree(
+        &self,
+        project_id: &str,
+        _document_id: Option<&str>,
+    ) -> Result<DocumentTree> {
+        let documents = self
+            .storage
+            .project_documents(project_id)?
+            .into_iter()
+            .map(|d| DocumentInfo {
+                id: d.id,
+                path: d.path,
+                title: d.title,
+                chapter_count: d.chapter_count,
+                word_count: d.word_count,
+            })
+            .collect();
+
+        let chunks = self.storage.project_chunks(project_id)?;
+
+        Ok(DocumentTree { documents, chunks })
     }
 
     pub fn update_candidate_status(&self, id: &str, status: &str) -> Result<()> {

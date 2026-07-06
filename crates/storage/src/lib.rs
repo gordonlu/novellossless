@@ -66,6 +66,16 @@ pub struct ProjectChunk {
     pub content: String,
     pub start_offset: i64,
     pub end_offset: i64,
+    pub word_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectDocument {
+    pub id: String,
+    pub path: String,
+    pub title: String,
+    pub chapter_count: i64,
+    pub word_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -588,7 +598,8 @@ impl Storage {
                 document_chunks.title,
                 document_chunks.content,
                 document_chunks.start_offset,
-                document_chunks.end_offset
+                document_chunks.end_offset,
+                document_chunks.word_count
             FROM document_chunks
             JOIN documents ON documents.id = document_chunks.document_id
             WHERE document_chunks.project_id = ?1 AND documents.deleted = 0
@@ -606,6 +617,31 @@ impl Storage {
                 content: row.get(5)?,
                 start_offset: row.get(6)?,
                 end_offset: row.get(7)?,
+                word_count: row.get(8)?,
+            })
+        })?;
+
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn project_documents(&self, project_id: &str) -> Result<Vec<ProjectDocument>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, path, title, chapter_count, word_count
+            FROM documents
+            WHERE project_id = ?1 AND deleted = 0
+            ORDER BY path ASC
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![project_id], |row| {
+            Ok(ProjectDocument {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                title: row.get(2)?,
+                chapter_count: row.get(3)?,
+                word_count: row.get(4)?,
             })
         })?;
 

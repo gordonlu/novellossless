@@ -116,6 +116,29 @@ export interface ProfileInfo {
   description: string;
 }
 
+export interface DocumentInfo {
+  id: string;
+  path: string;
+  title: string;
+  chapterCount: number;
+  wordCount: number;
+}
+
+export interface ChunkInfo {
+  id: string;
+  documentId: string;
+  chunkIndex: number;
+  title: string;
+  content: string;
+  startOffset: number;
+  wordCount: number;
+}
+
+export interface DocumentTree {
+  documents: DocumentInfo[];
+  chunks: ChunkInfo[];
+}
+
 export class DesktopRuntimeUnavailableError extends Error {
   constructor() {
     super("桌面运行时尚未连接。");
@@ -206,4 +229,9 @@ export function getPrivacyStatus() {
 export function listProfiles() {
   ensureDesktopRuntime();
   return invoke<ProfileInfo[]>("list_profiles");
+}
+
+export function getDocumentChunks(projectId: string) {
+  ensureDesktopRuntime();
+  return invoke<DocumentTree>("get_document_chunks", { projectId });
 }
