@@ -1192,7 +1192,7 @@ impl Storage {
     pub fn existing_document_id(&self, project_id: &str, path: &str) -> Result<Option<String>> {
         self.conn
             .query_row(
-                "SELECT id FROM documents WHERE project_id = ?1 AND path = ?2",
+                "SELECT id FROM documents WHERE project_id = ?1 AND path = ?2 AND deleted = 0",
                 params![project_id, path],
                 |row| row.get(0),
             )

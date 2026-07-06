@@ -279,13 +279,13 @@ impl NovelCore {
                                 let diff_arr: Vec<serde_json::Value> = {
                                     let mut v = Vec::new();
                                     for a in &diff.added {
-                                        v.push(serde_json::json!({"kind":"added","index":a.index,"title":a.title}));
+                                        v.push(serde_json::json!({"kind":"added","index":a.index,"title":a.title,"hash":a.hash}));
                                     }
                                     for r in &diff.removed {
-                                        v.push(serde_json::json!({"kind":"removed","index":r.index,"title":r.title}));
+                                        v.push(serde_json::json!({"kind":"removed","index":r.index,"title":r.title,"hash":r.hash}));
                                     }
                                     for m in &diff.modified {
-                                        v.push(serde_json::json!({"kind":"modified","index":m.index,"old_title":m.old_title,"new_title":m.new_title}));
+                                        v.push(serde_json::json!({"kind":"modified","index":m.index,"old_title":m.old_title,"new_title":m.new_title,"old_hash":m.old_hash,"new_hash":m.new_hash}));
                                     }
                                     v
                                 };
