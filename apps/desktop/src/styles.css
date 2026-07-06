@@ -701,6 +701,21 @@ blockquote {
   background: #eff7f3;
 }
 
+.risk-high {
+  color: #c62828;
+  font-weight: 600;
+}
+
+.risk-medium {
+  color: #cb6b0e;
+  font-weight: 600;
+}
+
+.risk-low {
+  color: #2e7d32;
+  font-weight: 600;
+}
+
 .mode-panel {
   display: flex;
   gap: 11px;
