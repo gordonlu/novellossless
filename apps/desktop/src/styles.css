@@ -716,6 +716,26 @@ blockquote {
   font-weight: 600;
 }
 
+.severity-serious {
+  color: #b71c1c;
+  font-weight: 600;
+}
+
+.severity-high {
+  color: #c62828;
+  font-weight: 600;
+}
+
+.severity-medium {
+  color: #cb6b0e;
+  font-weight: 600;
+}
+
+.severity-low {
+  color: #2e7d32;
+  font-weight: 600;
+}
+
 .mode-panel {
   display: flex;
   gap: 11px;

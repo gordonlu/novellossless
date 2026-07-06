@@ -679,7 +679,7 @@ export function App() {
           <Route path="/characters" element={<Characters projectId={selectedProject.id} />} />
           <Route path="/foreshadows" element={<Foreshadows projectId={selectedProject.id} />} />
           <Route path="/timeline" element={<Timeline />} />
-          <Route path="/issues" element={<Issues />} />
+          <Route path="/issues" element={<Issues projectId={selectedProject.id} />} />
           <Route path="/context-pack" element={<ContextPackRoute />} />
           <Route
             path="/privacy"
