@@ -1,0 +1,12 @@
+[extractors]
+people = true
+places = true
+items = true
+foreshadows = true
+eye_color_conflicts = true
+repeat_expressions = true
+
+[people]
+min_name_length = 2
+max_name_length = 4
+enable_alias_detection = true
