@@ -1027,6 +1027,142 @@ mod tests {
         assert_eq!(diff.modified[0].new_title, "B2");
     }
 
+    #[test]
+    fn diff_chunks_handles_no_changes() {
+        use crate::scan::diff_chunks;
+        use novellossless_storage::{NewChunk, ProjectChunk};
+
+        let old = vec![ProjectChunk {
+            document_id: "d".into(),
+            chunk_id: "c1".into(),
+            document_path: "p".into(),
+            chunk_index: 0,
+            title: "A".into(),
+            content: "aa".into(),
+            start_offset: 0,
+            end_offset: 2,
+            word_count: 1,
+            content_hash: "same".into(),
+        }];
+        let new = vec![NewChunk {
+            chunk_index: 0,
+            title: "A".into(),
+            start_offset: 0,
+            end_offset: 2,
+            content: "aa".into(),
+            content_hash: "same".into(),
+            word_count: 1,
+        }];
+
+        let diff = diff_chunks(&old, &new);
+        assert!(diff.added.is_empty());
+        assert!(diff.removed.is_empty());
+        assert!(diff.modified.is_empty());
+    }
+
+    #[test]
+    fn diff_chunks_handles_empty_input() {
+        use crate::scan::diff_chunks;
+        use novellossless_storage::NewChunk;
+
+        let old = vec![];
+        let new: Vec<NewChunk> = vec![];
+        let diff = diff_chunks(&old, &new);
+        assert!(diff.added.is_empty());
+        assert!(diff.removed.is_empty());
+        assert!(diff.modified.is_empty());
+    }
+
+    #[test]
+    fn diff_chunks_handles_removed_only() {
+        use crate::scan::diff_chunks;
+        use novellossless_storage::{NewChunk, ProjectChunk};
+
+        let old = vec![
+            ProjectChunk {
+                document_id: "d".into(),
+                chunk_id: "c1".into(),
+                document_path: "p".into(),
+                chunk_index: 0,
+                title: "A".into(),
+                content: "aa".into(),
+                start_offset: 0,
+                end_offset: 2,
+                word_count: 1,
+                content_hash: "h1".into(),
+            },
+            ProjectChunk {
+                document_id: "d".into(),
+                chunk_id: "c2".into(),
+                document_path: "p".into(),
+                chunk_index: 1,
+                title: "B".into(),
+                content: "bb".into(),
+                start_offset: 3,
+                end_offset: 5,
+                word_count: 1,
+                content_hash: "h2".into(),
+            },
+        ];
+        let new: Vec<NewChunk> = vec![];
+
+        let diff = diff_chunks(&old, &new);
+        assert!(diff.added.is_empty());
+        assert_eq!(diff.removed.len(), 2);
+        let removed_indices: Vec<i64> = diff.removed.iter().map(|r| r.index).collect();
+        assert!(removed_indices.contains(&0));
+        assert!(removed_indices.contains(&1));
+        assert!(diff.modified.is_empty());
+    }
+
+    #[test]
+    fn diff_chunks_handles_added_only() {
+        use crate::scan::diff_chunks;
+        use novellossless_storage::{NewChunk, ProjectChunk};
+
+        let old: Vec<ProjectChunk> = vec![];
+        let new = vec![NewChunk {
+            chunk_index: 0,
+            title: "A".into(),
+            start_offset: 0,
+            end_offset: 2,
+            content: "aa".into(),
+            content_hash: "h1".into(),
+            word_count: 1,
+        }];
+
+        let diff = diff_chunks(&old, &new);
+        assert_eq!(diff.added.len(), 1);
+        assert!(diff.removed.is_empty());
+        assert!(diff.modified.is_empty());
+    }
+
+    #[test]
+    fn incremental_scan_skips_unchanged_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir).expect("dir");
+        std::fs::write(novel_dir.join("001.txt"), "第一章 雨夜\n内容不变。").expect("write");
+
+        let core = NovelCore::from_storage(
+            novellossless_storage::Storage::open_memory().expect("storage"),
+        );
+        let project = core.import_project("test", &novel_dir).expect("import");
+        let first = core.incremental_scan(&project.id).expect("first scan");
+        assert_eq!(first.scanned_documents, 1);
+        assert_eq!(first.created, 1);
+        assert_eq!(first.modified, 0);
+        assert_eq!(first.unchanged, 0);
+
+        let second = core.incremental_scan(&project.id).expect("second scan");
+        assert_eq!(second.scanned_documents, 0);
+        assert_eq!(second.created, 0);
+        assert_eq!(second.modified, 0);
+        assert_eq!(second.unchanged, 1);
+        assert_eq!(second.deleted, 0);
+        assert_eq!(second.failed, 0);
+    }
+
     fn person_aliases_are_merged() {
         let temp = tempfile::tempdir().expect("tempdir");
         let novel_dir = temp.path().join("novel");

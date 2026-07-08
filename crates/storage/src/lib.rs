@@ -1095,12 +1095,13 @@ impl Storage {
     ) -> Result<Vec<RevisionRecord>> {
         let (clause, pid, doc) = match document_id {
             Some(d) => (
-                "WHERE project_id = ?1 AND document_id = ?2".to_string(),
+                "WHERE project_id = ?1 AND document_id = ?2 ORDER BY created_at DESC LIMIT ?3"
+                    .to_string(),
                 project_id.to_string(),
                 d.to_string(),
             ),
             None => (
-                "WHERE project_id = ?1".to_string(),
+                "WHERE project_id = ?1 ORDER BY created_at DESC LIMIT ?2".to_string(),
                 project_id.to_string(),
                 String::new(),
             ),
@@ -1108,7 +1109,7 @@ impl Storage {
         let sql = format!(
             "SELECT id, project_id, document_id, revision_type, old_content_hash, new_content_hash, \
              old_chunk_count, new_chunk_count, chunks_added, chunks_removed, chunks_modified, \
-             diff_json, created_at FROM revision_history {clause} ORDER BY created_at DESC LIMIT ?3"
+             diff_json, created_at FROM revision_history {clause}"
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let map_row = |row: &rusqlite::Row<'_>| {
@@ -1412,6 +1413,94 @@ mod tests {
         let revs = storage.list_revisions(&pid, Some(&doc_id), 10)?;
         assert_eq!(revs.len(), 1);
         assert_eq!(revs[0].chunks_modified, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn existing_document_id_excludes_deleted() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("deleted_test")?;
+        let doc_id = seed_document(&storage, &pid, "gone.txt")?;
+        storage.mark_document_deleted(&doc_id)?;
+        let found = storage.existing_document_id(&pid, "gone.txt")?;
+        assert!(found.is_none(), "deleted doc should not be returned");
+        Ok(())
+    }
+
+    #[test]
+    fn project_document_by_id_excludes_deleted() {
+        let storage = Storage::open_memory().expect("storage opens");
+        let project = storage
+            .create_project("del_test", "/tmp/test")
+            .expect("project created");
+        let doc_id = storage
+            .upsert_document_with_chunks(
+                &project.id,
+                &NewDocument {
+                    path: "d.txt".into(),
+                    kind: "text".into(),
+                    title: "章".into(),
+                    chapter_count: 1,
+                    content_hash: "h".into(),
+                    word_count: 1,
+                    encoding: "utf-8".into(),
+                },
+                &[NewChunk {
+                    chunk_index: 0,
+                    title: "章".into(),
+                    start_offset: 0,
+                    end_offset: 1,
+                    content: "a".into(),
+                    content_hash: "h".into(),
+                    word_count: 1,
+                }],
+            )
+            .expect("doc stored");
+        storage.mark_document_deleted(&doc_id).expect("deleted");
+        let result = storage.project_document_by_id(&doc_id);
+        assert!(result.is_err(), "deleted doc should error");
+    }
+
+    #[test]
+    fn project_document_by_id_not_found() {
+        let storage = Storage::open_memory().expect("storage opens");
+        let result = storage.project_document_by_id("nonexistent");
+        assert!(result.is_err(), "bogus id should error");
+    }
+
+    #[test]
+    fn mark_document_deleted_idempotent() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("idempotent")?;
+        let doc_id = seed_document(&storage, &pid, "again.txt")?;
+        storage.mark_document_deleted(&doc_id)?;
+        storage.mark_document_deleted(&doc_id)?;
+        Ok(())
+    }
+
+    #[test]
+    fn list_file_scans_empty_project() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("empty_scans")?;
+        let logs = storage.list_file_scans(&pid, 10)?;
+        assert!(logs.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn list_revisions_without_document_id() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("all_revs")?;
+        let d1 = seed_document(&storage, &pid, "a.txt")?;
+        let d2 = seed_document(&storage, &pid, "b.txt")?;
+        storage.record_revision(&pid, &d1, "incremental", None, "h1", 0, 1, 0, 0, 1, None)?;
+        storage.record_revision(&pid, &d2, "incremental", None, "h2", 0, 1, 0, 0, 1, None)?;
+        let revs = storage.list_revisions(&pid, None, 10)?;
+        assert_eq!(revs.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn document_chunks_empty_for_nonexistent_document() -> Result<()> {
+        let storage = test_storage()?;
+        let chunks = storage.document_chunks("bogus")?;
+        assert!(chunks.is_empty());
         Ok(())
     }
 
