@@ -2,14 +2,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use novellossless_core::{
-    Dashboard, DocumentTree, NovelCore, PrivacyStatus, ProfileInfo, ScanReport,
+    Dashboard, DocumentTree, NovelCore, PrivacyStatus, ProfileInfo, ProgressReporter, ScanReport,
 };
 use novellossless_storage::{
     ContextPack, ContinuityIssue, FileScanLog, ForeshadowItem, NarrativeNode, Project,
     ProjectChunk, ProjectSummary, RevisionRecord, SearchHit,
 };
 use serde::Serialize;
-use tauri::Manager;
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager};
 
 mod watcher;
 
@@ -155,6 +157,13 @@ struct ProfileInfoDto {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct SettingDto {
+    key: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DocumentDto {
     id: String,
     path: String,
@@ -254,7 +263,8 @@ fn get_dashboard(app: tauri::AppHandle, project_id: String) -> Result<DashboardD
 #[tauri::command]
 fn scan_project(app: tauri::AppHandle, project_id: String) -> Result<ScanReportDto, String> {
     let core = open_core(&app)?;
-    core.scan_project(&project_id)
+    let progress = TauriProgressReporter { app };
+    core.scan_project_with_progress(&project_id, &progress)
         .map(ScanReportDto::from)
         .map_err(to_command_error)
 }
@@ -379,6 +389,22 @@ fn list_profiles(app: tauri::AppHandle) -> Result<Vec<ProfileInfoDto>, String> {
 }
 
 #[tauri::command]
+fn get_settings(app: tauri::AppHandle) -> Result<Vec<SettingDto>, String> {
+    let core = open_core(&app)?;
+    Ok(core
+        .get_settings()
+        .into_iter()
+        .map(|(k, v)| SettingDto { key: k, value: v })
+        .collect())
+}
+
+#[tauri::command]
+fn update_setting(app: tauri::AppHandle, key: String, value: String) -> Result<(), String> {
+    let core = open_core(&app)?;
+    core.update_setting(&key, &value).map_err(to_command_error)
+}
+
+#[tauri::command]
 fn get_document_chunks(
     app: tauri::AppHandle,
     project_id: String,
@@ -392,7 +418,8 @@ fn get_document_chunks(
 #[tauri::command]
 fn incremental_scan(app: tauri::AppHandle, project_id: String) -> Result<ScanResultDto, String> {
     let core = open_core(&app)?;
-    core.incremental_scan(&project_id)
+    let progress = TauriProgressReporter { app };
+    core.incremental_scan_with_progress(&project_id, &progress)
         .map(ScanResultDto::from)
         .map_err(to_command_error)
 }
@@ -471,11 +498,120 @@ fn watcher_status(app: tauri::AppHandle) -> Result<bool, String> {
     Ok(false)
 }
 
+#[tauri::command]
+fn backup_database(app: tauri::AppHandle) -> Result<String, String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let db_path = database_path(&app)?;
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let backup_name = format!("novellossless-backup-{ts}.db");
+    let dest = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法定位数据目录：{e}"))?
+        .join(&backup_name);
+    std::fs::copy(&db_path, &dest).map_err(|e| format!("备份失败：{e}"))?;
+    Ok(dest.display().to_string())
+}
+
+#[tauri::command]
+fn restore_database(app: tauri::AppHandle, source_path: String) -> Result<(), String> {
+    let db_path = database_path(&app)?;
+    let source = PathBuf::from(&source_path);
+    if !source.exists() {
+        return Err("备份文件不存在".to_string());
+    }
+    std::fs::copy(&source, &db_path).map_err(|e| format!("恢复失败：{e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn init_demo_project(app: tauri::AppHandle) -> Result<ProjectDto, String> {
+    let core = open_core(&app)?;
+    let demo_src = find_demo_root()?;
+    let demo_dir = std::env::temp_dir().join(format!(
+        "novellossless-demo-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    ));
+    std::fs::create_dir_all(&demo_dir).map_err(|e| format!("无法创建示例目录：{e}"))?;
+    for entry in std::fs::read_dir(&demo_src).map_err(|e| format!("无法读取示例源：{e}"))? {
+        let entry = entry.map_err(|e| format!("读取条目失败：{e}"))?;
+        if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            let dest = demo_dir.join(entry.file_name());
+            std::fs::copy(entry.path(), &dest).map_err(|e| format!("复制文件失败：{e}"))?;
+        }
+    }
+    let project = core
+        .import_project("雨巷钟声（示例）", &demo_dir)
+        .map_err(to_command_error)?;
+    let _ = core.scan_project(&project.id);
+    Ok(ProjectDto::from(project))
+}
+
+fn find_demo_root() -> Result<PathBuf, String> {
+    let current_dir = std::env::current_dir().map_err(|e| format!("无法定位当前目录：{e}"))?;
+    for ancestor in current_dir.ancestors() {
+        let candidate = ancestor.join("profiles").join("demo");
+        if candidate.join("001-雨夜.txt").exists() {
+            return Ok(candidate);
+        }
+    }
+    Err("未找到示例项目文件 (profiles/demo/)".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(WatcherState(Mutex::new(None)))
+        .setup(|app| {
+            let show = MenuItemBuilder::with_id("show", "显示窗口").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
+            let menu = MenuBuilder::new(app)
+                .item(&show)
+                .separator()
+                .item(&quit)
+                .build()?;
+            TrayIconBuilder::new()
+                .menu(&menu)
+                .tooltip("novellossless")
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        if let Some(w) = tray.app_handle().get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             list_projects,
             import_project,
@@ -492,16 +628,63 @@ pub fn run() {
             get_project_summary,
             get_privacy_status,
             list_profiles,
+            get_settings,
+            update_setting,
             get_document_chunks,
             incremental_scan,
             list_file_scans,
             list_revisions,
             start_watching,
             stop_watching,
-            watcher_status
+            watcher_status,
+            backup_database,
+            restore_database,
+            init_demo_project
         ])
         .run(tauri::generate_context!())
         .expect("failed to run novellossless desktop app");
+}
+
+struct TauriProgressReporter {
+    app: tauri::AppHandle,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanProgressPayload {
+    current: usize,
+    total: usize,
+    file: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanErrorPayload {
+    file: String,
+    message: String,
+}
+
+impl ProgressReporter for TauriProgressReporter {
+    fn report(&self, current: usize, total: usize, file: &str) {
+        let _ = self.app.emit(
+            "scan-progress",
+            ScanProgressPayload {
+                current,
+                total,
+                file: file.to_string(),
+            },
+        );
+    }
+
+    fn error(&self, file: &str, message: &str) {
+        let _ = self.app.emit(
+            "scan-error",
+            ScanErrorPayload {
+                file: file.to_string(),
+                message: message.to_string(),
+            },
+        );
+    }
 }
 
 fn open_core(app: &tauri::AppHandle) -> Result<NovelCore, String> {

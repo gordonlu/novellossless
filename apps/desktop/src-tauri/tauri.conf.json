@@ -27,6 +27,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.ico"]
+    "icon": ["icons/icon.ico", "icons/icon.png"],
+    "publisher": "novellossless",
+    "copyright": "MIT",
+    "category": "Productivity",
+    "shortDescription": "本地创作记忆助手",
+    "longDescription": "novellossless 是一个本地优先的长篇小说记忆与创作控制助手。它通过本地扫描、索引与分析，帮助作者追踪人物、地点、物件和伏笔，发现冲突与重复描写。"
   }
 }

@@ -302,3 +302,33 @@ export function watcherStatus() {
   ensureDesktopRuntime();
   return invoke<boolean>("watcher_status");
 }
+
+export interface Setting {
+  key: string;
+  value: string;
+}
+
+export function getSettings() {
+  ensureDesktopRuntime();
+  return invoke<Setting[]>("get_settings");
+}
+
+export function updateSetting(key: string, value: string) {
+  ensureDesktopRuntime();
+  return invoke<void>("update_setting", { key, value });
+}
+
+export function backupDatabase() {
+  ensureDesktopRuntime();
+  return invoke<string>("backup_database");
+}
+
+export function restoreDatabase(sourcePath: string) {
+  ensureDesktopRuntime();
+  return invoke<void>("restore_database", { sourcePath });
+}
+
+export function initDemoProject() {
+  ensureDesktopRuntime();
+  return invoke<Project>("init_demo_project");
+}

@@ -30,6 +30,17 @@ pub struct NovelCore {
     people_config: PeopleConfig,
 }
 
+pub trait ProgressReporter {
+    fn report(&self, current: usize, total: usize, file: &str);
+    fn error(&self, file: &str, message: &str);
+}
+
+pub struct NoopProgress;
+impl ProgressReporter for NoopProgress {
+    fn report(&self, _current: usize, _total: usize, _file: &str) {}
+    fn error(&self, _file: &str, _message: &str) {}
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanReport {
     pub project_id: String,
@@ -110,12 +121,33 @@ impl NovelCore {
         let profiles_root = find_profiles_root();
         let profiles = load_profiles_from(&profiles_root);
         let analysis_rules = profile::load_analysis_rules(&profiles_root);
-        Ok(Self {
+        let core = Self {
             storage,
             profiles,
             extractor_rules: analysis_rules.extractors,
             people_config: analysis_rules.people,
-        })
+        };
+        core.seed_default_settings().ok();
+        Ok(core)
+    }
+
+    fn seed_default_settings(&self) -> Result<()> {
+        let defaults: [(&str, &str); 8] = [
+            ("language", "zh-CN"),
+            ("theme", "dark"),
+            ("auto_scan", "true"),
+            ("auto_watch", "false"),
+            ("ai_enabled", "false"),
+            ("uploads_enabled", "false"),
+            ("backup_enabled", "true"),
+            ("backup_path", ""),
+        ];
+        for (key, value) in &defaults {
+            if self.storage.get_setting(key)?.is_none() {
+                self.storage.set_setting(key, value)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn from_storage(storage: Storage) -> Self {
@@ -169,22 +201,36 @@ impl NovelCore {
     }
 
     pub fn scan_project(&self, project_id: &str) -> Result<ScanReport> {
+        self.scan_project_with_progress(project_id, &NoopProgress)
+    }
+
+    pub fn scan_project_with_progress(
+        &self,
+        project_id: &str,
+        progress: &dyn ProgressReporter,
+    ) -> Result<ScanReport> {
         let project = self
             .storage
             .get_project(project_id)?
             .with_context(|| format!("project not found: {project_id}"))?;
         let root = PathBuf::from(&project.root_path);
         let files = collect_text_files(&root)?;
+        let total = files.len();
         let mut scanned_documents = 0;
         let mut skipped_files = 0;
 
         let profile = self.profiles.first();
         let enable_chunking = profile.map(|p| p.rules.chapter_recognition).unwrap_or(true);
 
-        for file in files {
-            match self.scan_file(&project, &root, &file, enable_chunking) {
+        for (i, file) in files.iter().enumerate() {
+            let relative = relative_document_path(&root, file);
+            progress.report(i + 1, total, &relative);
+            match self.scan_file(&project, &root, file, enable_chunking) {
                 Ok(()) => scanned_documents += 1,
-                Err(_) => skipped_files += 1,
+                Err(e) => {
+                    progress.error(&relative, &e.to_string());
+                    skipped_files += 1;
+                }
             }
         }
 
@@ -200,12 +246,21 @@ impl NovelCore {
     }
 
     pub fn incremental_scan(&self, project_id: &str) -> Result<ScanResult> {
+        self.incremental_scan_with_progress(project_id, &NoopProgress)
+    }
+
+    pub fn incremental_scan_with_progress(
+        &self,
+        project_id: &str,
+        progress: &dyn ProgressReporter,
+    ) -> Result<ScanResult> {
         let project = self
             .storage
             .get_project(project_id)?
             .with_context(|| format!("project not found: {project_id}"))?;
         let root = PathBuf::from(&project.root_path);
         let files = collect_text_files(&root)?;
+        let total = files.len();
         let profile = self.profiles.first();
         let enable_chunking = profile.map(|p| p.rules.chapter_recognition).unwrap_or(true);
 
@@ -215,8 +270,9 @@ impl NovelCore {
         let mut failed = 0usize;
         let mut file_paths: HashSet<String> = HashSet::new();
 
-        for file in &files {
+        for (i, file) in files.iter().enumerate() {
             let relative = relative_document_path(&root, file);
+            progress.report(i + 1, total, &relative);
             file_paths.insert(relative.clone());
             let hash = file_content_hash(file)?;
 
@@ -232,7 +288,10 @@ impl NovelCore {
                             );
                         }
                     }
-                    Err(_) => failed += 1,
+                    Err(e) => {
+                        progress.error(&relative, &e.to_string());
+                        failed += 1;
+                    }
                 },
                 Some(doc_id) => {
                     let current_doc = self.storage.project_document_by_id(&doc_id)?;
@@ -312,7 +371,10 @@ impl NovelCore {
                                     diff_json.as_deref(),
                                 );
                             }
-                            Err(_) => failed += 1,
+                            Err(e) => {
+                                progress.error(&relative, &e.to_string());
+                                failed += 1;
+                            }
                         }
                     }
                 }
@@ -605,11 +667,24 @@ impl NovelCore {
         )
     }
 
+    pub fn get_settings(&self) -> Vec<(String, String)> {
+        self.storage.get_all_settings().unwrap_or_default()
+    }
+
+    pub fn update_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.storage.set_setting(key, value).map_err(Into::into)
+    }
+
     pub fn privacy_status(&self, db_path: &Path) -> PrivacyStatus {
+        let settings: std::collections::HashMap<String, String> =
+            self.get_settings().into_iter().collect();
+        let to_bool = |key: &str, default: bool| -> bool {
+            settings.get(key).map_or(default, |v| v == "true")
+        };
         PrivacyStatus {
             offline_mode: true,
-            ai_enabled: false,
-            uploads_enabled: false,
+            ai_enabled: to_bool("ai_enabled", false),
+            uploads_enabled: to_bool("uploads_enabled", false),
             clipboard_access: false,
             screenshot_access: false,
             keyboard_monitoring: false,

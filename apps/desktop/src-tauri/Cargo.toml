@@ -18,5 +18,5 @@ novellossless-core = { path = "../../../crates/core" }
 novellossless-storage = { path = "../../../crates/storage" }
 notify = "8"
 serde.workspace = true
-tauri.workspace = true
+tauri = { workspace = true, features = ["tray-icon"] }
 tauri-plugin-dialog.workspace = true

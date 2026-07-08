@@ -1,8 +1,9 @@
-import { AlertTriangle, Archive, BookOpenText, CheckCircle2, Clock3, Database, History, Home, LockKeyhole, Network, RefreshCw, Search, ShieldCheck, UserRound } from "lucide-react";
+import { AlertTriangle, Archive, BookOpenText, CheckCircle2, Clock3, Database, History, Home, LockKeyhole, Network, RefreshCw, Search, Settings, ShieldCheck, UserRound } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { clsx } from "clsx";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
+import { listen } from "@tauri-apps/api/event";
 import {
   buildContextPack,
   ContinuityIssue,
@@ -12,6 +13,7 @@ import {
   ForeshadowItem,
   getDashboard,
   getPrivacyStatus,
+  getSettings,
   importProject,
   isDesktopRuntime,
   listCandidates,
@@ -26,9 +28,11 @@ import {
   ProjectSummary,
   scanProject,
   ScanReport,
+  Setting,
   updateCandidateStatus,
   updateForeshadowStatus,
   updateIssueStatus,
+  updateSetting,
 } from "./tauri";
 import { basename, formatError } from "./lib/helpers";
 import { ContentView } from "./routes/ContentView";
@@ -40,6 +44,7 @@ import { Issues } from "./routes/Issues";
 import { Privacy } from "./routes/Privacy";
 import { RevisionHistory } from "./routes/RevisionHistory";
 import { SearchView } from "./routes/SearchView";
+import { Settings as SettingsRoute } from "./routes/Settings";
 import { Timeline } from "./routes/Timeline";
 
 const demoProject: Project = {
@@ -61,6 +66,7 @@ const navigation = [
   { label: "改稿历史", icon: History, path: "/history" },
   { label: "上下文包", icon: Archive, path: "/context-pack" },
   { label: "隐私中心", icon: LockKeyhole, path: "/privacy" },
+  { label: "设置", icon: Settings, path: "/settings" },
 ];
 
 const emptySummary: ProjectSummary = {
@@ -176,8 +182,26 @@ export function App() {
   const [busy, setBusy] = useState<BusyState>("loading");
   const [notice, setNotice] = useState("离线模式已开启，正文仅保存在本机。");
   const [error, setError] = useState("");
+  const [scanProgress, setScanProgress] = useState<{ current: number; total: number; file: string } | null>(null);
 
   const hasRealProject = selectedProject.id !== "demo";
+
+  useEffect(() => {
+    const unlisteners: (() => void)[] = [];
+    (async () => {
+      unlisteners.push(
+        await listen<{ current: number; total: number; file: string }>("scan-progress", (e) => {
+          setScanProgress(e.payload);
+        }),
+      );
+      unlisteners.push(
+        await listen<{ file: string; message: string }>("scan-error", (e) => {
+          setError(`扫描出错: ${e.payload.file} — ${e.payload.message}`);
+        }),
+      );
+    })();
+    return () => unlisteners.forEach((fn) => fn());
+  }, []);
 
   useEffect(() => {
     let canceled = false;
@@ -382,6 +406,7 @@ export function App() {
       setError(formatError(reason));
     } finally {
       setBusy("idle");
+      setScanProgress(null);
     }
   }
 
@@ -549,6 +574,14 @@ export function App() {
             <span>{notice}</span>
           </div>
           {error && <div className="error">{error}</div>}
+          {scanProgress && (
+            <div className="scan-progress-bar">
+              <div className="scan-progress-fill" style={{ width: `${(scanProgress.current / scanProgress.total) * 100}%` }} />
+              <span className="scan-progress-label">
+                {scanProgress.current} / {scanProgress.total} · {scanProgress.file}
+              </span>
+            </div>
+          )}
         </section>
 
         <Routes>
@@ -591,6 +624,10 @@ export function App() {
           <Route
             path="/privacy"
             element={<Privacy privacy={privacy} />}
+          />
+          <Route
+            path="/settings"
+            element={<SettingsRoute privacy={privacy} />}
           />
         </Routes>
       </main>
