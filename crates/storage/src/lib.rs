@@ -192,6 +192,34 @@ pub struct ContextPack {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct NewProfileMetric {
+    pub profile_id: String,
+    pub project_id: String,
+    pub metric_type: String,
+    pub document_id: Option<String>,
+    pub value_json: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProfileMetric {
+    pub id: String,
+    pub profile_id: String,
+    pub metric_type: String,
+    pub document_id: Option<String>,
+    pub value: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct KnowledgePackEntry {
+    pub profile_id: String,
+    pub pack_name: String,
+    pub pack_type: String,
+    pub entries_json: String,
+    pub version: String,
+}
+
 pub struct Storage {
     conn: Connection,
 }
@@ -364,6 +392,26 @@ impl Storage {
                 chunks_removed INTEGER NOT NULL DEFAULT 0,
                 chunks_modified INTEGER NOT NULL DEFAULT 0,
                 diff_json TEXT,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS profile_metrics (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                profile_id TEXT NOT NULL,
+                metric_type TEXT NOT NULL,
+                document_id TEXT REFERENCES documents(id) ON DELETE CASCADE,
+                value_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS knowledge_packs (
+                id TEXT PRIMARY KEY,
+                profile_id TEXT NOT NULL,
+                pack_name TEXT NOT NULL,
+                pack_type TEXT NOT NULL,
+                entries_json TEXT NOT NULL,
+                version TEXT NOT NULL DEFAULT '0.1.0',
                 created_at TEXT NOT NULL
             );
             "#,
@@ -1207,6 +1255,109 @@ impl Storage {
             .map_err(Into::into)
     }
 
+    pub fn upsert_profile_metric(&self, metric: &NewProfileMetric) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO profile_metrics (id, project_id, profile_id, metric_type, document_id, value_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                Uuid::new_v4().to_string(),
+                metric.project_id,
+                metric.profile_id,
+                metric.metric_type,
+                metric.document_id,
+                metric.value_json,
+                Utc::now().to_rfc3339()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_profile_metrics(
+        &self,
+        project_id: &str,
+        profile_id: &str,
+    ) -> Result<Vec<ProfileMetric>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, profile_id, metric_type, document_id, value_json, created_at
+             FROM profile_metrics
+             WHERE project_id = ?1 AND profile_id = ?2
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![project_id, profile_id], |row| {
+            Ok(ProfileMetric {
+                id: row.get(0)?,
+                profile_id: row.get(1)?,
+                metric_type: row.get(2)?,
+                document_id: row.get(3)?,
+                value: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn get_project_profiles(&self, project_id: &str) -> Result<Vec<String>> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT enabled_profiles_json FROM projects WHERE id = ?1",
+                params![project_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let json =
+            json.ok_or_else(|| anyhow::anyhow!("project not found: {project_id}"))?;
+        if json.is_empty() {
+            return Ok(vec!["common_longform".to_string()]);
+        }
+        serde_json::from_str(&json).map_err(|e| anyhow::anyhow!("parse enabled_profiles_json: {e}"))
+    }
+
+    pub fn set_project_profiles(&self, project_id: &str, profile_ids: &[&str]) -> Result<()> {
+        let json = serde_json::to_string(profile_ids)?;
+        self.conn.execute(
+            "UPDATE projects SET enabled_profiles_json = ?1, updated_at = ?2 WHERE id = ?3",
+            params![json, Utc::now().to_rfc3339(), project_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_knowledge_pack(&self, pack: &KnowledgePackEntry) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO knowledge_packs (id, profile_id, pack_name, pack_type, entries_json, version, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                Uuid::new_v4().to_string(),
+                pack.profile_id,
+                pack.pack_name,
+                pack.pack_type,
+                pack.entries_json,
+                pack.version,
+                Utc::now().to_rfc3339()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_knowledge_packs(&self, profile_id: &str) -> Result<Vec<KnowledgePackEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT profile_id, pack_name, pack_type, entries_json, version
+             FROM knowledge_packs WHERE profile_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![profile_id], |row| {
+            Ok(KnowledgePackEntry {
+                profile_id: row.get(0)?,
+                pack_name: row.get(1)?,
+                pack_type: row.get(2)?,
+                entries_json: row.get(3)?,
+                version: row.get(4)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
         self.conn
             .query_row(
@@ -1577,5 +1728,49 @@ mod tests {
             .expect("search succeeds");
 
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn stores_and_retrieves_profile_metrics() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("profile_metrics_test")?;
+        storage.upsert_profile_metric(&NewProfileMetric {
+            profile_id: "shuangwen".into(),
+            project_id: pid.clone(),
+            metric_type: "爽点密度".into(),
+            document_id: None,
+            value_json: r#"{"value": 3.5, "unit": "per_1000_chars"}"#.into(),
+        })?;
+        let metrics = storage.get_profile_metrics(&pid, "shuangwen")?;
+        assert_eq!(metrics.len(), 1);
+        assert_eq!(metrics[0].metric_type, "爽点密度");
+        Ok(())
+    }
+
+    #[test]
+    fn stores_and_loads_project_profiles() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("profiles_crud_test")?;
+        let default = storage.get_project_profiles(&pid)?;
+        assert_eq!(default, vec!["common_longform"]);
+        storage.set_project_profiles(&pid, &["common_longform", "shuangwen"])?;
+        let loaded = storage.get_project_profiles(&pid)?;
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded.contains(&"shuangwen".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn stores_and_retrieves_knowledge_packs() -> Result<()> {
+        let storage = test_storage()?;
+        storage.upsert_knowledge_pack(&KnowledgePackEntry {
+            profile_id: "history".into(),
+            pack_name: "tang_officials".into(),
+            pack_type: "officials".into(),
+            entries_json: r#"[{"term":"尚书","rank":"正三品"}]"#.into(),
+            version: "0.1.0".into(),
+        })?;
+        let packs = storage.get_knowledge_packs("history")?;
+        assert_eq!(packs.len(), 1);
+        assert_eq!(packs[0].pack_name, "tang_officials");
+        Ok(())
     }
 }
