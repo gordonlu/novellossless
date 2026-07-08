@@ -547,7 +547,7 @@ fn init_demo_project(app: tauri::AppHandle) -> Result<ProjectDto, String> {
         }
     }
     let project = core
-        .import_project("雨巷钟声（示例）", &demo_dir)
+        .import_project("三国演义（示例）", &demo_dir)
         .map_err(to_command_error)?;
     let _ = core.scan_project(&project.id);
     Ok(ProjectDto::from(project))
@@ -557,7 +557,7 @@ fn find_demo_root() -> Result<PathBuf, String> {
     let current_dir = std::env::current_dir().map_err(|e| format!("无法定位当前目录：{e}"))?;
     for ancestor in current_dir.ancestors() {
         let candidate = ancestor.join("profiles").join("demo");
-        if candidate.join("001-雨夜.txt").exists() {
+        if candidate.join("001-桃园结义.txt").exists() {
             return Ok(candidate);
         }
     }
