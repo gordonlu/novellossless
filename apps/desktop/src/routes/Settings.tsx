@@ -1,10 +1,11 @@
 import { Check, Download, RefreshCw, Shield, Upload } from "lucide-react";
 import { clsx } from "clsx";
 import { useEffect, useState } from "react";
-import { backupDatabase, getSettings, PrivacyStatus, restoreDatabase, updateSetting } from "../tauri";
+import { backupDatabase, getAvailableProfiles, getEnabledProfiles, getSettings, PrivacyStatus, ProfileManifest, restoreDatabase, setEnabledProfiles, updateSetting } from "../tauri";
 
 interface Props {
   privacy: PrivacyStatus;
+  projectId?: string;
 }
 
 interface SettingEntry {
@@ -35,11 +36,14 @@ const SETTING_DESCRIPTIONS: Record<string, string> = {
   backup_path: "备份文件存放路径",
 };
 
-export function Settings({ privacy }: Props) {
+export function Settings({ privacy, projectId }: Props) {
   const [entries, setEntries] = useState<Record<string, SettingEntry>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [profiles, setProfiles] = useState<ProfileManifest[]>([]);
+  const [enabledIds, setEnabledIds] = useState<string[]>([]);
+  const [profileSaving, setProfileSaving] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -50,13 +54,21 @@ export function Settings({ privacy }: Props) {
           map[s.key] = { key: s.key, value: s.value, dirty: false };
         }
         setEntries(map);
+
+        const available = await getAvailableProfiles();
+        setProfiles(available);
+
+        if (projectId) {
+          const enabled = await getEnabledProfiles(projectId);
+          setEnabledIds(enabled);
+        }
       } catch {
         // preview mode
       } finally {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [projectId]);
 
   async function handleToggle(key: string) {
     const current = entries[key]?.value === "true";
@@ -261,6 +273,41 @@ export function Settings({ privacy }: Props) {
           </button>
         </div>
       </section>
+
+      {profiles.length > 0 && (
+        <section className="settings-section">
+          <h3 className="settings-section-title">创作模式</h3>
+          {profiles.map((p) => (
+            <div className="settings-row" key={p.id}>
+              <div>
+                <label>{p.name}</label>
+                <p className="settings-desc">{p.description}</p>
+              </div>
+              <button
+                type="button"
+                className={clsx("toggle", enabledIds.includes(p.id) && "toggle-on")}
+                onClick={async () => {
+                  setProfileSaving(true);
+                  try {
+                    const next = enabledIds.includes(p.id)
+                      ? enabledIds.filter((id) => id !== p.id)
+                      : [...enabledIds, p.id];
+                    await setEnabledProfiles(projectId!, next);
+                    setEnabledIds(next);
+                  } catch (e) {
+                    setMessage(`保存失败：${e}`);
+                  } finally {
+                    setProfileSaving(false);
+                  }
+                }}
+                disabled={profileSaving || !projectId}
+              >
+                <div className="toggle-knob" />
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
     </div>
   );
 }

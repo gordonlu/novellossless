@@ -26,7 +26,7 @@ import type {
   ForeshadowItem,
   NarrativeNode,
   PrivacyStatus,
-  ProfileInfo,
+  ProfileManifest,
   ScanReport,
 } from "../tauri";
 
@@ -48,7 +48,7 @@ interface DashboardProps {
   hasRealProject: boolean;
   error: string;
   privacy: PrivacyStatus;
-  profiles: ProfileInfo[];
+  profiles: ProfileManifest[];
   chooseFolder: () => void;
   handleImport: () => void;
   handleScan: () => void;

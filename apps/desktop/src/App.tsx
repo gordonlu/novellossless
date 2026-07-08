@@ -19,11 +19,11 @@ import {
   listCandidates,
   listForeshadows,
   listIssues,
-  listProfiles,
+  getAvailableProfiles,
   listProjects,
   NarrativeNode,
   PrivacyStatus,
-  ProfileInfo,
+  ProfileManifest,
   Project,
   ProjectSummary,
   scanProject,
@@ -150,12 +150,18 @@ const previewPrivacy: PrivacyStatus = {
   storageMode: "标准本地模式",
 };
 
-const previewProfiles: ProfileInfo[] = [
+const previewProfiles: ProfileManifest[] = [
   {
     id: "common_longform",
     name: "通用长篇",
     version: "0.1.0",
     description: "章节识别、全文搜索、候选记忆和来源证据。",
+    enabledByDefault: false,
+    entityTypes: [],
+    factTypes: [],
+    eventTypes: [],
+    metrics: [],
+    checks: [],
   },
 ];
 
@@ -177,7 +183,7 @@ export function App() {
   const [foreshadows, setForeshadows] = useState<ForeshadowItem[]>(sampleForeshadows);
   const [issues, setIssues] = useState<ContinuityIssue[]>(sampleIssues);
   const [privacy, setPrivacy] = useState<PrivacyStatus>(previewPrivacy);
-  const [profiles, setProfiles] = useState<ProfileInfo[]>(previewProfiles);
+  const [profiles, setProfiles] = useState<ProfileManifest[]>(previewProfiles);
   const [contextPack, setContextPack] = useState<ContextPack | null>(null);
   const [busy, setBusy] = useState<BusyState>("loading");
   const [notice, setNotice] = useState("离线模式已开启，正文仅保存在本机。");
@@ -253,7 +259,7 @@ export function App() {
   const scanReady = hasRealProject;
 
   async function loadGlobalP0() {
-    const [privacyStatus, profileItems] = await Promise.all([getPrivacyStatus(), listProfiles()]);
+    const [privacyStatus, profileItems] = await Promise.all([getPrivacyStatus(), getAvailableProfiles()]);
     setPrivacy(privacyStatus);
     setProfiles(profileItems);
   }
@@ -627,7 +633,7 @@ export function App() {
           />
           <Route
             path="/settings"
-            element={<SettingsRoute privacy={privacy} />}
+            element={<SettingsRoute privacy={privacy} projectId={selectedProject.id} />}
           />
         </Routes>
       </main>

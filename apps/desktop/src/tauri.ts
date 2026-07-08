@@ -109,11 +109,26 @@ export interface PrivacyStatus {
   storageMode: string;
 }
 
-export interface ProfileInfo {
+export interface ProfileManifest {
   id: string;
   name: string;
   version: string;
   description: string;
+  enabledByDefault: boolean;
+  entityTypes: string[];
+  factTypes: string[];
+  eventTypes: string[];
+  metrics: string[];
+  checks: string[];
+}
+
+export interface ProfileMetric {
+  id: string;
+  profileId: string;
+  metricType: string;
+  documentId: string | null;
+  value: string;
+  createdAt: string;
 }
 
 export interface DocumentInfo {
@@ -226,9 +241,24 @@ export function getPrivacyStatus() {
   return invoke<PrivacyStatus>("get_privacy_status");
 }
 
-export function listProfiles() {
+export function getAvailableProfiles() {
   ensureDesktopRuntime();
-  return invoke<ProfileInfo[]>("list_profiles");
+  return invoke<ProfileManifest[]>("get_available_profiles");
+}
+
+export function getEnabledProfiles(projectId: string) {
+  ensureDesktopRuntime();
+  return invoke<string[]>("get_enabled_profiles", { projectId });
+}
+
+export function setEnabledProfiles(projectId: string, profileIds: string[]) {
+  ensureDesktopRuntime();
+  return invoke<void>("set_enabled_profiles", { projectId, profileIds });
+}
+
+export function getProfileMetrics(projectId: string, profileId: string) {
+  ensureDesktopRuntime();
+  return invoke<ProfileMetric[]>("get_profile_metrics", { projectId, profileId });
 }
 
 export function getDocumentChunks(projectId: string) {

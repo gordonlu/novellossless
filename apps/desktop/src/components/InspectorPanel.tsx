@@ -1,5 +1,5 @@
 import { AlertTriangle, ListChecks, LockKeyhole, Sparkles } from "lucide-react";
-import type { ProfileInfo, PrivacyStatus, SearchHit } from "../tauri";
+import type { ProfileManifest, PrivacyStatus, SearchHit } from "../tauri";
 import { basename, plainSnippet } from "../lib/helpers";
 
 interface InspectorPanelProps {
@@ -7,7 +7,7 @@ interface InspectorPanelProps {
   onRevealSource?: () => void;
   issuesCount?: number;
   privacy?: PrivacyStatus;
-  profiles?: ProfileInfo[];
+  profiles?: ProfileManifest[];
 }
 
 export function InspectorPanel({ selectedHit, onRevealSource = () => {}, issuesCount = 0, privacy = { offlineMode: true, aiEnabled: false, uploadsEnabled: false, clipboardAccess: false, screenshotAccess: false, keyboardMonitoring: false, databasePath: "", storageMode: "" }, profiles = [] }: InspectorPanelProps) {
