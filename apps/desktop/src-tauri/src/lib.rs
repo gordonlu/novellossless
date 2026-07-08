@@ -174,25 +174,6 @@ struct ProfileMetricDto {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct KnowledgePackDto {
-    id: String,
-    profile_id: String,
-    pack_name: String,
-    pack_type: String,
-    entries: Vec<KnowledgeItemDto>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct KnowledgeItemDto {
-    term: String,
-    category: String,
-    rank: String,
-    note: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct SettingDto {
     key: String,
     value: String,
@@ -217,6 +198,7 @@ struct ChunkDto {
     title: String,
     content: String,
     start_offset: i64,
+    end_offset: i64,
     word_count: i64,
 }
 
@@ -977,6 +959,7 @@ impl From<ProjectChunk> for ChunkDto {
             title: chunk.title,
             content: chunk.content,
             start_offset: chunk.start_offset,
+            end_offset: chunk.end_offset,
             word_count: chunk.word_count,
         }
     }

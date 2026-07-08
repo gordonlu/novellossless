@@ -1255,6 +1255,14 @@ impl Storage {
             .map_err(Into::into)
     }
 
+    pub fn delete_profile_metrics(&self, project_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM profile_metrics WHERE project_id = ?1",
+            params![project_id],
+        )?;
+        Ok(())
+    }
+
     pub fn upsert_profile_metric(&self, metric: &NewProfileMetric) -> Result<()> {
         self.conn.execute(
             "INSERT INTO profile_metrics (id, project_id, profile_id, metric_type, document_id, value_json, created_at)

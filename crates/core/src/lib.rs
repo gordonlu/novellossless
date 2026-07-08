@@ -763,6 +763,8 @@ impl NovelCore {
         let chunk_texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
         let results = registry.compute_all(&chunk_texts);
 
+        self.storage.delete_profile_metrics(project_id)?;
+
         for r in results {
             self.storage.upsert_profile_metric(&NewProfileMetric {
                 profile_id: r.profile_id,
@@ -971,8 +973,12 @@ impl NovelCore {
             .upsert_foreshadow_items(project_id, &foreshadows)?;
         self.storage.upsert_continuity_issues(project_id, &issues)?;
 
-        let _ = self.compute_profile_metrics(project_id);
-        let _ = self.emit_profile_checks(project_id);
+        if let Err(e) = self.compute_profile_metrics(project_id) {
+            eprintln!("warning: profile metrics failed: {e}");
+        }
+        if let Err(e) = self.emit_profile_checks(project_id) {
+            eprintln!("warning: profile checks failed: {e}");
+        }
 
         Ok(AnalysisReport {
             person_candidates: people.len(),
@@ -1344,6 +1350,7 @@ mod tests {
         assert_eq!(second.failed, 0);
     }
 
+    #[test]
     fn person_aliases_are_merged() {
         let temp = tempfile::tempdir().expect("tempdir");
         let novel_dir = temp.path().join("novel");

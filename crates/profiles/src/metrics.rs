@@ -89,7 +89,6 @@ pub(crate) fn metric_kind_for(metric_type: &str) -> MetricKind {
                 "逆袭",
                 "翻盘",
                 "爆",
-                "碾压",
                 "众人",
                 "全场",
                 "目瞪口呆",

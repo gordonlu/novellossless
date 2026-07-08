@@ -146,6 +146,7 @@ export interface ChunkInfo {
   title: string;
   content: string;
   startOffset: number;
+  endOffset: number;
   wordCount: number;
 }
 
