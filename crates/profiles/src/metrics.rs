@@ -83,8 +83,19 @@ pub(crate) fn metric_kind_for(metric_type: &str) -> MetricKind {
     match metric_type {
         "爽点密度" => MetricKind::KeywordDensity(
             [
-                "打脸", "震惊", "碾压", "逆袭", "翻盘", "爆", "碾压", "众人", "全场", "目瞪口呆",
-                "骇然", "震撼", "跪",
+                "打脸",
+                "震惊",
+                "碾压",
+                "逆袭",
+                "翻盘",
+                "爆",
+                "碾压",
+                "众人",
+                "全场",
+                "目瞪口呆",
+                "骇然",
+                "震撼",
+                "跪",
             ]
             .into_iter()
             .map(String::from)
@@ -106,8 +117,18 @@ pub(crate) fn metric_kind_for(metric_type: &str) -> MetricKind {
         ),
         "时代穿帮风险" => MetricKind::ModernWordDensity(
             [
-                "手机", "电脑", "电视", "网络", "微信", "互联网", "数据", "芯片", "程序", "代码",
-                "AI", "算法",
+                "手机",
+                "电脑",
+                "电视",
+                "网络",
+                "微信",
+                "互联网",
+                "数据",
+                "芯片",
+                "程序",
+                "代码",
+                "AI",
+                "算法",
             ]
             .into_iter()
             .map(String::from)

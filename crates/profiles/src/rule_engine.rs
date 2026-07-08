@@ -1,5 +1,5 @@
-use crate::manifest::*;
 use crate::loader::ProfileLoader;
+use crate::manifest::*;
 use anyhow::Result;
 use std::path::Path;
 
@@ -23,14 +23,30 @@ impl RuleEngine {
 
         for m in manifests {
             if let Ok(Some(rules)) = ProfileLoader::load_rules(root, &m.id) {
-                if rules.extractors.people { merged.people = true; }
-                if rules.extractors.places { merged.places = true; }
-                if rules.extractors.items { merged.items = true; }
-                if rules.extractors.foreshadows { merged.foreshadows = true; }
-                if rules.extractors.eye_color_conflicts { merged.eye_color_conflicts = true; }
-                if rules.extractors.repeat_expressions { merged.repeat_expressions = true; }
-                if rules.extractors.shuangwen_metrics { merged.shuangwen_metrics = true; }
-                if rules.extractors.history_checks { merged.history_checks = true; }
+                if rules.extractors.people {
+                    merged.people = true;
+                }
+                if rules.extractors.places {
+                    merged.places = true;
+                }
+                if rules.extractors.items {
+                    merged.items = true;
+                }
+                if rules.extractors.foreshadows {
+                    merged.foreshadows = true;
+                }
+                if rules.extractors.eye_color_conflicts {
+                    merged.eye_color_conflicts = true;
+                }
+                if rules.extractors.repeat_expressions {
+                    merged.repeat_expressions = true;
+                }
+                if rules.extractors.shuangwen_metrics {
+                    merged.shuangwen_metrics = true;
+                }
+                if rules.extractors.history_checks {
+                    merged.history_checks = true;
+                }
             }
         }
 

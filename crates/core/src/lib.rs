@@ -10,14 +10,17 @@ use crate::analysis::{
     EyeColorConflictExtractor, ForeshadowExtractor, ItemExtractor, PersonExtractor, PlaceExtractor,
     RepeatExpressionExtractor,
 };
-use crate::profile::{ExtractorRules, PeopleConfig, ProfileConfig};
+use crate::profile::{
+    ExtractorRules, IssueEmitter, KnowledgePackIndex, KnowledgePackLoader, MetricRegistry,
+    PeopleConfig, ProfileLoader, ProfileManifest, ProfileRules,
+};
 
 use anyhow::{Context, Result};
 use novellossless_parser::parse_document;
 use novellossless_storage::{
     ContextPack, ContinuityIssue, ForeshadowItem, NarrativeNode, NewChunk, NewContinuityIssue,
-    NewDocument, NewForeshadowItem, NewNarrativeNode, Project, ProjectChunk, ProjectSummary,
-    SearchHit, Storage,
+    NewDocument, NewForeshadowItem, NewNarrativeNode, NewProfileMetric, Project, ProjectChunk,
+    ProjectSummary, SearchHit, Storage,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -25,9 +28,11 @@ use walkdir::WalkDir;
 
 pub struct NovelCore {
     storage: Storage,
-    profiles: Vec<ProfileConfig>,
+    profiles_root: PathBuf,
+    profile_manifests: Vec<ProfileManifest>,
     extractor_rules: ExtractorRules,
     people_config: PeopleConfig,
+    default_rules: ProfileRules,
 }
 
 pub trait ProgressReporter {
@@ -119,13 +124,19 @@ impl NovelCore {
     pub fn open(db_path: &Path) -> Result<Self> {
         let storage = Storage::open(db_path)?;
         let profiles_root = find_profiles_root();
-        let profiles = load_profiles_from(&profiles_root);
+        let manifests = ProfileLoader::load_all(&profiles_root).unwrap_or_default();
         let analysis_rules = profile::load_analysis_rules(&profiles_root);
+        let default_rules = ProfileLoader::load_rules(&profiles_root, "common_longform")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         let core = Self {
             storage,
-            profiles,
+            profiles_root,
+            profile_manifests: manifests,
             extractor_rules: analysis_rules.extractors,
             people_config: analysis_rules.people,
+            default_rules,
         };
         core.seed_default_settings().ok();
         Ok(core)
@@ -152,13 +163,19 @@ impl NovelCore {
 
     pub fn from_storage(storage: Storage) -> Self {
         let profiles_root = find_profiles_root();
-        let profiles = load_profiles_from(&profiles_root);
+        let manifests = ProfileLoader::load_all(&profiles_root).unwrap_or_default();
         let analysis_rules = profile::load_analysis_rules(&profiles_root);
+        let default_rules = ProfileLoader::load_rules(&profiles_root, "common_longform")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         Self {
             storage,
-            profiles,
+            profiles_root,
+            profile_manifests: manifests,
             extractor_rules: analysis_rules.extractors,
             people_config: analysis_rules.people,
+            default_rules,
         }
     }
 
@@ -219,8 +236,7 @@ impl NovelCore {
         let mut scanned_documents = 0;
         let mut skipped_files = 0;
 
-        let profile = self.profiles.first();
-        let enable_chunking = profile.map(|p| p.rules.chapter_recognition).unwrap_or(true);
+        let enable_chunking = self.default_rules.chapter_recognition;
 
         for (i, file) in files.iter().enumerate() {
             let relative = relative_document_path(&root, file);
@@ -261,8 +277,7 @@ impl NovelCore {
         let root = PathBuf::from(&project.root_path);
         let files = collect_text_files(&root)?;
         let total = files.len();
-        let profile = self.profiles.first();
-        let enable_chunking = profile.map(|p| p.rules.chapter_recognition).unwrap_or(true);
+        let enable_chunking = self.default_rules.chapter_recognition;
 
         let mut created = 0usize;
         let mut modified = 0usize;
@@ -416,8 +431,7 @@ impl NovelCore {
             .get_project(project_id)?
             .with_context(|| format!("project not found: {project_id}"))?;
         let root = PathBuf::from(&project.root_path);
-        let profile = self.profiles.first();
-        let enable_chunking = profile.map(|p| p.rules.chapter_recognition).unwrap_or(true);
+        let enable_chunking = self.default_rules.chapter_recognition;
         let relative = relative_document_path(&root, file_path);
         let hash = file_content_hash(file_path)?;
 
@@ -695,15 +709,118 @@ impl NovelCore {
 
     pub fn load_profiles(&self, _profiles_root: &Path) -> Result<Vec<ProfileInfo>> {
         Ok(self
-            .profiles
+            .profile_manifests
             .iter()
             .map(|p| ProfileInfo {
                 id: p.id.clone(),
                 name: p.name.clone(),
-                version: "0.1.0".to_string(),
-                description: String::new(),
+                version: p.version.clone(),
+                description: p.description.clone(),
             })
             .collect())
+    }
+
+    pub fn get_available_profiles(&self) -> Result<Vec<ProfileManifest>> {
+        Ok(self.profile_manifests.clone())
+    }
+
+    pub fn get_enabled_profiles(&self, project_id: &str) -> Result<Vec<String>> {
+        self.storage.get_project_profiles(project_id)
+    }
+
+    pub fn set_enabled_profiles(&self, project_id: &str, profile_ids: &[&str]) -> Result<()> {
+        self.storage.set_project_profiles(project_id, profile_ids)
+    }
+
+    pub fn get_profile_metrics(
+        &self,
+        project_id: &str,
+        profile_id: &str,
+    ) -> Result<Vec<novellossless_storage::ProfileMetric>> {
+        self.storage.get_profile_metrics(project_id, profile_id)
+    }
+
+    pub fn compute_profile_metrics(&self, project_id: &str) -> Result<()> {
+        let enabled_ids = self.get_enabled_profiles(project_id)?;
+        let enabled_manifests: Vec<&ProfileManifest> = self
+            .profile_manifests
+            .iter()
+            .filter(|m| enabled_ids.contains(&m.id))
+            .collect();
+        if enabled_manifests.is_empty() {
+            return Ok(());
+        }
+
+        let registry = MetricRegistry::from_profiles(
+            &enabled_manifests
+                .iter()
+                .map(|m| (*m).clone())
+                .collect::<Vec<_>>(),
+            &self.profiles_root,
+        )?;
+
+        let chunks = self.storage.project_chunks(project_id)?;
+        let chunk_texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
+        let results = registry.compute_all(&chunk_texts);
+
+        for r in results {
+            self.storage.upsert_profile_metric(&NewProfileMetric {
+                profile_id: r.profile_id,
+                project_id: project_id.to_string(),
+                metric_type: r.metric_type,
+                document_id: None,
+                value_json: serde_json::json!({"value": r.value, "unit": r.unit}).to_string(),
+            })?;
+        }
+
+        Ok(())
+    }
+
+    pub fn emit_profile_checks(&self, project_id: &str) -> Result<Vec<ContinuityIssue>> {
+        let enabled_ids = self.get_enabled_profiles(project_id)?;
+        let enabled_manifests: Vec<&ProfileManifest> = self
+            .profile_manifests
+            .iter()
+            .filter(|m| enabled_ids.contains(&m.id))
+            .collect();
+        if enabled_manifests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let check_defs = IssueEmitter::extract_checks(
+            &enabled_manifests
+                .iter()
+                .map(|m| (*m).clone())
+                .collect::<Vec<_>>(),
+        );
+
+        let chunks = self.storage.project_chunks(project_id)?;
+        let chunk_texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
+
+        let mut knowledge = KnowledgePackIndex::default();
+        if enabled_ids.contains(&"history".to_string()) {
+            if let Ok(packs) = KnowledgePackLoader::load_all(&self.profiles_root, "history") {
+                knowledge = KnowledgePackLoader::build_index(&packs);
+            }
+        }
+
+        let check_issues = IssueEmitter::emit(&check_defs, &chunk_texts, &knowledge);
+
+        let issues: Vec<NewContinuityIssue> = check_issues
+            .into_iter()
+            .map(|ci| NewContinuityIssue {
+                issue_type: ci.issue_type,
+                severity: ci.severity,
+                title: ci.title,
+                description: ci.description,
+                evidence_json: ci.evidence_json,
+                suggested_actions_json: ci.suggested_actions_json,
+            })
+            .collect();
+
+        self.storage.upsert_continuity_issues(project_id, &issues)?;
+
+        Ok(self.storage.list_continuity_issues(project_id, 100)?)
     }
 
     fn scan_file(
@@ -854,6 +971,9 @@ impl NovelCore {
             .upsert_foreshadow_items(project_id, &foreshadows)?;
         self.storage.upsert_continuity_issues(project_id, &issues)?;
 
+        let _ = self.compute_profile_metrics(project_id);
+        let _ = self.emit_profile_checks(project_id);
+
         Ok(AnalysisReport {
             person_candidates: people.len(),
             place_candidates: places.len(),
@@ -967,20 +1087,6 @@ fn find_profiles_root() -> PathBuf {
         }
     }
     PathBuf::from("profiles")
-}
-
-fn load_profiles_from(profiles_root: &Path) -> Vec<ProfileConfig> {
-    let common = profiles_root.join("common_longform").join("profile.toml");
-    if !common.exists() {
-        return Vec::new();
-    }
-    let content = match std::fs::read_to_string(&common) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-    toml::from_str::<ProfileConfig>(&content)
-        .map(|p| vec![p])
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1260,5 +1366,54 @@ mod tests {
             .find(|c| c.name == "林澈")
             .expect("林澈 found");
         assert!(linche.occurrence_count >= 2);
+    }
+
+    #[test]
+    fn get_available_profiles_returns_all_profiles() {
+        let core = NovelCore::from_storage(Storage::open_memory().expect("storage"));
+        let profiles = core.get_available_profiles().expect("profiles");
+        assert!(!profiles.is_empty(), "should find at least common_longform");
+        let ids: Vec<&str> = profiles.iter().map(|p| p.id.as_str()).collect();
+        assert!(ids.contains(&"common_longform"));
+    }
+
+    #[test]
+    fn set_and_get_enabled_profiles() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+        std::fs::write(novel_dir.join("001.txt"), "test content")?;
+
+        let storage = Storage::open_memory()?;
+        let core = NovelCore::from_storage(storage);
+        let project = core.import_project("test", &novel_dir)?;
+        core.set_enabled_profiles(&project.id, &["common_longform", "shuangwen"])?;
+        let enabled = core.get_enabled_profiles(&project.id)?;
+        assert_eq!(enabled.len(), 2);
+        assert!(enabled.contains(&"shuangwen".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn compute_profile_metrics_returns_sane_values() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+        std::fs::write(
+            novel_dir.join("001.txt"),
+            "第一章 震惊！主角一拳打脸反派，全场骇然。\n第二章 主角突破金丹期，碾压对手。",
+        )?;
+
+        let storage = Storage::open_memory()?;
+        let core = NovelCore::from_storage(storage);
+        let project = core.import_project("test", &novel_dir)?;
+        core.scan_project(&project.id)?;
+        core.set_enabled_profiles(&project.id, &["shuangwen"])?;
+        core.compute_profile_metrics(&project.id)?;
+
+        let metrics = core.get_profile_metrics(&project.id, "shuangwen")?;
+        let shuangwen_density = metrics.iter().find(|m| m.metric_type == "爽点密度");
+        assert!(shuangwen_density.is_some(), "should have 爽点密度 metric");
+        Ok(())
     }
 }

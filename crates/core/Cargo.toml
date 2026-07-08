@@ -9,6 +9,7 @@ repository.workspace = true
 anyhow.workspace = true
 deeplossless = { workspace = true, optional = true }
 novellossless-parser = { path = "../parser" }
+novellossless-profiles = { path = "../profiles" }
 novellossless-storage = { path = "../storage" }
 regex.workspace = true
 serde.workspace = true

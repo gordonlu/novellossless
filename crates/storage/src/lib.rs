@@ -1306,8 +1306,7 @@ impl Storage {
                 |row| row.get(0),
             )
             .optional()?;
-        let json =
-            json.ok_or_else(|| anyhow::anyhow!("project not found: {project_id}"))?;
+        let json = json.ok_or_else(|| anyhow::anyhow!("project not found: {project_id}"))?;
         if json.is_empty() {
             return Ok(vec!["common_longform".to_string()]);
         }
