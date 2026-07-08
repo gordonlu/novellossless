@@ -9,7 +9,7 @@ pub use checks::IssueEmitter;
 pub use knowledge::KnowledgePackLoader;
 pub use loader::ProfileLoader;
 pub use manifest::*;
-pub use metrics::MetricRegistry;
+pub use metrics::{MetricRegistry, MetricResult, MetricKind, MetricDefinition};
 pub use rule_engine::RuleEngine;
 
 #[cfg(test)]
