@@ -6,7 +6,7 @@ pub mod metrics;
 pub mod rule_engine;
 
 pub use checks::{CheckIssue, IssueEmitter};
-pub use knowledge::KnowledgePackLoader;
+pub use knowledge::{KnowledgeItem, KnowledgePackEntry, KnowledgePackIndex, KnowledgePackLoader};
 pub use loader::ProfileLoader;
 pub use manifest::*;
 pub use metrics::{MetricDefinition, MetricKind, MetricRegistry, MetricResult};
@@ -103,6 +103,42 @@ weight = 1.0"#,
             .expect("metrics should be present");
         assert_eq!(metrics_toml.metrics.len(), 1);
         assert_eq!(metrics_toml.metrics[0].id, "爽点密度");
+    }
+
+    #[test]
+    fn knowledge_loader_loads_packs() {
+        let (_tmp, dir) = test_profiles_dir();
+        let knowledge_dir = dir.join("history").join("knowledge");
+        fs::create_dir_all(&knowledge_dir).unwrap();
+        fs::write(
+            knowledge_dir.join("tang_officials.toml"),
+            r#"[[entry]]
+term = "尚书"
+category = "官职"
+dynasty = "唐"
+
+[[entry]]
+term = "刺史"
+category = "官职"
+dynasty = "唐""#,
+        )
+        .unwrap();
+
+        let packs = KnowledgePackLoader::load_all(&dir, "history").unwrap();
+        assert_eq!(packs.len(), 1);
+        assert_eq!(packs[0].pack_name, "tang_officials");
+        assert_eq!(packs[0].entries.len(), 2);
+    }
+
+    #[test]
+    fn knowledge_index_builds_and_queries() {
+        let mut index = KnowledgePackIndex::default();
+        index.add_dynasty_terms("唐", &["尚书", "刺史"]);
+        let terms = index.terms_for_dynasty("唐");
+        assert_eq!(terms.len(), 2);
+        assert!(terms.contains(&"尚书".to_string()));
+        let no_terms = index.terms_for_dynasty("宋");
+        assert!(no_terms.is_empty());
     }
 
     #[test]
