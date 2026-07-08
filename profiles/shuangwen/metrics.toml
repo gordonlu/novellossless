@@ -1,0 +1,17 @@
+[[metrics]]
+id = "爽点密度"
+name = "爽点密度"
+description = "每千字中爽点词汇（打脸、震惊、碾压等）的出现次数"
+weight = 1.0
+
+[[metrics]]
+id = "冲突频次"
+name = "冲突频次"
+description = "每千字中冲突/对抗词汇的频率"
+weight = 1.0
+
+[[metrics]]
+id = "升级间隔"
+name = "升级间隔"
+description = "相邻升级事件之间的章节间隔"
+weight = 1.0

@@ -1,9 +1,22 @@
 id = "common_longform"
 name = "通用长篇"
 version = "0.1.0"
+description = "适用于绝大多数长篇小说的通用模式，提供人物、地点、物品、伏笔等基础抽取与分析"
 
-[rules]
-chapter_recognition = true
-full_text_search = true
-evidence_required = true
-auto_modify_source = false
+[entities]
+types = ["人物", "地点", "物品"]
+
+[facts]
+types = ["人物关系", "地点归属"]
+
+[events]
+types = ["相遇", "分离", "冲突", "和解"]
+
+[metrics]
+enabled = []
+
+[checks]
+enabled = []
+
+[templates]
+enabled = []

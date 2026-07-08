@@ -1,0 +1,17 @@
+id = "history"
+name = "历史考据模式"
+version = "0.1.0"
+description = "检查历史制度、官职、地名、器物和时代穿帮，适用于历史题材作品"
+enabled_by_default = false
+
+[entities]
+types = ["官职", "地名", "年号", "货币", "器物", "制度", "历史事件"]
+
+[facts]
+types = ["时代归属", "制度约束", "地理位置", "角色认知"]
+
+[checks]
+enabled = ["时代穿帮检查", "官职品级冲突"]
+
+[reports]
+enabled = ["考据风险报告"]

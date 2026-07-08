@@ -1,0 +1,55 @@
+[[entry]]
+term = "尚书"
+category = "官职"
+dynasty = "唐"
+rank = "正三品"
+note = "尚书省长官，唐后期多为虚衔"
+
+[[entry]]
+term = "侍中"
+category = "官职"
+dynasty = "唐"
+rank = "正三品"
+note = "门下省长官"
+
+[[entry]]
+term = "中书令"
+category = "官职"
+dynasty = "唐"
+rank = "正三品"
+note = "中书省长官"
+
+[[entry]]
+term = "刺史"
+category = "官职"
+dynasty = "唐"
+rank = "从三品"
+note = "州级最高行政长官"
+
+[[entry]]
+term = "县令"
+category = "官职"
+dynasty = "唐"
+rank = "正六品上"
+note = "县级长官"
+
+[[entry]]
+term = "节度使"
+category = "官职"
+dynasty = "唐"
+rank = "正二品"
+note = "天宝年间边防重镇长官"
+
+[[entry]]
+term = "宰相"
+category = "官职"
+dynasty = "唐"
+rank = "正一品"
+note = "泛指同中书门下平章事"
+
+[[entry]]
+term = "太守"
+category = "官职"
+dynasty = "唐"
+rank = "从三品"
+note = "天宝元年改州刺史为太守"

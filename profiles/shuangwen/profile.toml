@@ -1,0 +1,23 @@
+id = "shuangwen"
+name = "爽文模式"
+version = "0.1.0"
+description = "监控爽点、升级、打脸、战力和节奏，适用于网文爽文类作品"
+enabled_by_default = false
+
+[entities]
+types = ["主角", "反派", "境界", "功法", "法宝", "剧情单元"]
+
+[facts]
+types = ["战力等级", "身份地位", "冲突结果"]
+
+[events]
+types = ["打脸", "升级", "反转", "胜利", "爆点"]
+
+[metrics]
+enabled = ["爽点密度", "冲突频次", "升级间隔"]
+
+[checks]
+enabled = ["战力倒退检查", "连续低爽点章节"]
+
+[templates]
+enabled = []
