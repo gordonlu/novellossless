@@ -68,6 +68,10 @@ enum Command {
         #[arg(long, default_value_t = 10)]
         limit: i64,
     },
+    Profiles {
+        #[arg(long)]
+        project_id: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -172,6 +176,33 @@ fn main() -> Result<()> {
         } => {
             let pack = core.build_context_pack(&project_id, &query, limit)?;
             println!("{}", pack.content);
+        }
+        Command::Profiles { project_id } => {
+            let available = core.get_available_profiles()?;
+            println!("可用模式包 ({}):", available.len());
+            for p in &available {
+                println!("  {} | {} v{}", p.id, p.name, p.version);
+                println!("    {}", p.description);
+                if let Some(ref pid) = project_id {
+                    let enabled = core.get_enabled_profiles(pid)?;
+                    let is_enabled = enabled.contains(&p.id);
+                    println!(
+                        "    状态: {}",
+                        if is_enabled {
+                            "已启用 ✓"
+                        } else {
+                            "未启用"
+                        }
+                    );
+                }
+                if !p.metrics.enabled.is_empty() {
+                    println!("    指标: {}", p.metrics.enabled.join(", "));
+                }
+                if !p.checks.enabled.is_empty() {
+                    println!("    检查: {}", p.checks.enabled.join(", "));
+                }
+                println!();
+            }
         }
     }
 
