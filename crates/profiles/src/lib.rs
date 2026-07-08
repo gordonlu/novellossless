@@ -104,4 +104,28 @@ weight = 1.0"#,
         assert_eq!(metrics_toml.metrics.len(), 1);
         assert_eq!(metrics_toml.metrics[0].id, "爽点密度");
     }
+
+    #[test]
+    fn rule_engine_merges_multiple_profiles() {
+        let (_tmp, dir) = test_profiles_dir();
+        fs::write(
+            dir.join("shuangwen").join("rules.toml"),
+            r#"[extractors]
+shuangwen_metrics = true"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("common_longform").join("rules.toml"),
+            r#"[extractors]
+people = true
+places = true"#,
+        )
+        .unwrap();
+
+        let manifests = ProfileLoader::load_all(&dir).unwrap();
+        let engine = RuleEngine::merge_rules(&manifests, &dir).unwrap();
+        assert!(engine.extractors.people);
+        assert!(engine.extractors.shuangwen_metrics);
+        assert!(!engine.extractors.history_checks);
+    }
 }
