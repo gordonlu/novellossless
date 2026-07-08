@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use novellossless_core::{
-    Dashboard, DocumentTree, NovelCore, PrivacyStatus, ProfileInfo, ProgressReporter, ScanReport,
+    Dashboard, DocumentTree, NovelCore, PrivacyStatus, ProgressReporter, ScanReport,
 };
 use novellossless_storage::{
     ContextPack, ContinuityIssue, FileScanLog, ForeshadowItem, NarrativeNode, Project,
@@ -148,11 +148,47 @@ struct PrivacyStatusDto {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ProfileInfoDto {
+struct ProfileManifestDto {
     id: String,
     name: String,
     version: String,
     description: String,
+    enabled_by_default: bool,
+    entity_types: Vec<String>,
+    fact_types: Vec<String>,
+    event_types: Vec<String>,
+    metrics: Vec<String>,
+    checks: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfileMetricDto {
+    id: String,
+    profile_id: String,
+    metric_type: String,
+    document_id: Option<String>,
+    value: String,
+    created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KnowledgePackDto {
+    id: String,
+    profile_id: String,
+    pack_name: String,
+    pack_type: String,
+    entries: Vec<KnowledgeItemDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KnowledgeItemDto {
+    term: String,
+    category: String,
+    rank: String,
+    note: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -380,11 +416,66 @@ fn get_privacy_status(app: tauri::AppHandle) -> Result<PrivacyStatusDto, String>
 }
 
 #[tauri::command]
-fn list_profiles(app: tauri::AppHandle) -> Result<Vec<ProfileInfoDto>, String> {
+fn get_available_profiles(app: tauri::AppHandle) -> Result<Vec<ProfileManifestDto>, String> {
     let core = open_core(&app)?;
-    let profiles_root = profiles_root().map_err(to_command_error)?;
-    core.load_profiles(&profiles_root)
-        .map(|profiles| profiles.into_iter().map(ProfileInfoDto::from).collect())
+    let manifests = core.get_available_profiles().map_err(to_command_error)?;
+    Ok(manifests
+        .into_iter()
+        .map(|m| ProfileManifestDto {
+            id: m.id,
+            name: m.name,
+            version: m.version,
+            description: m.description,
+            enabled_by_default: m.enabled_by_default.unwrap_or(false),
+            entity_types: m.entities.types,
+            fact_types: m.facts.types,
+            event_types: m.events.types,
+            metrics: m.metrics.enabled,
+            checks: m.checks.enabled,
+        })
+        .collect())
+}
+
+#[tauri::command]
+fn get_enabled_profiles(app: tauri::AppHandle, project_id: String) -> Result<Vec<String>, String> {
+    let core = open_core(&app)?;
+    core.get_enabled_profiles(&project_id)
+        .map_err(to_command_error)
+}
+
+#[tauri::command]
+fn set_enabled_profiles(
+    app: tauri::AppHandle,
+    project_id: String,
+    profile_ids: Vec<String>,
+) -> Result<(), String> {
+    let core = open_core(&app)?;
+    let ids: Vec<&str> = profile_ids.iter().map(|s| s.as_str()).collect();
+    core.set_enabled_profiles(&project_id, &ids)
+        .map_err(to_command_error)
+}
+
+#[tauri::command]
+fn get_profile_metrics(
+    app: tauri::AppHandle,
+    project_id: String,
+    profile_id: String,
+) -> Result<Vec<ProfileMetricDto>, String> {
+    let core = open_core(&app)?;
+    core.get_profile_metrics(&project_id, &profile_id)
+        .map(|metrics| {
+            metrics
+                .into_iter()
+                .map(|m| ProfileMetricDto {
+                    id: m.id,
+                    profile_id: m.profile_id,
+                    metric_type: m.metric_type,
+                    document_id: m.document_id,
+                    value: m.value,
+                    created_at: m.created_at,
+                })
+                .collect()
+        })
         .map_err(to_command_error)
 }
 
@@ -627,7 +718,10 @@ pub fn run() {
             build_context_pack,
             get_project_summary,
             get_privacy_status,
-            list_profiles,
+            get_available_profiles,
+            get_enabled_profiles,
+            set_enabled_profiles,
+            get_profile_metrics,
             get_settings,
             update_setting,
             get_document_chunks,
@@ -700,22 +794,6 @@ fn database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&app_data)
         .map_err(|error| format!("无法创建应用数据目录 {}：{error}", app_data.display()))?;
     Ok(app_data.join("novellossless.db"))
-}
-
-fn profiles_root() -> Result<PathBuf, String> {
-    let current_dir =
-        std::env::current_dir().map_err(|error| format!("无法定位当前目录：{error}"))?;
-    for ancestor in current_dir.ancestors() {
-        let candidate = ancestor.join("profiles");
-        if candidate
-            .join("common_longform")
-            .join("profile.toml")
-            .exists()
-        {
-            return Ok(candidate);
-        }
-    }
-    Ok(current_dir.join("profiles"))
 }
 
 fn to_command_error(error: impl std::fmt::Display) -> String {
@@ -865,17 +943,6 @@ impl From<PrivacyStatus> for PrivacyStatusDto {
             keyboard_monitoring: status.keyboard_monitoring,
             database_path: status.database_path,
             storage_mode: status.storage_mode,
-        }
-    }
-}
-
-impl From<ProfileInfo> for ProfileInfoDto {
-    fn from(profile: ProfileInfo) -> Self {
-        Self {
-            id: profile.id,
-            name: profile.name,
-            version: profile.version,
-            description: profile.description,
         }
     }
 }
