@@ -2364,6 +2364,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "novellossless-profiles"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "tempfile",
+ "toml 0.8.2",
+]
+
+[[package]]
 name = "novellossless-storage"
 version = "0.1.0"
 dependencies = [

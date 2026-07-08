@@ -4,6 +4,7 @@ members = [
     "apps/desktop/src-tauri",
     "crates/core",
     "crates/parser",
+    "crates/profiles",
     "crates/storage",
 ]
 resolver = "2"
@@ -30,4 +31,5 @@ tauri-build = "2.5.1"
 tauri-plugin-dialog = "2.4.1"
 tempfile = "3.20.0"
 uuid = { version = "1.17.0", features = ["v4"] }
+novellossless-profiles = { path = "crates/profiles" }
 walkdir = "2.5.0"
