@@ -5,11 +5,11 @@ pub mod manifest;
 pub mod metrics;
 pub mod rule_engine;
 
-pub use checks::IssueEmitter;
+pub use checks::{CheckIssue, IssueEmitter};
 pub use knowledge::KnowledgePackLoader;
 pub use loader::ProfileLoader;
 pub use manifest::*;
-pub use metrics::{MetricRegistry, MetricResult, MetricKind, MetricDefinition};
+pub use metrics::{MetricDefinition, MetricKind, MetricRegistry, MetricResult};
 pub use rule_engine::RuleEngine;
 
 #[cfg(test)]
