@@ -81,17 +81,34 @@ pub fn read_docx_file(path: &Path) -> Result<TextDocument> {
         .context("failed to read word/document.xml")?;
 
     let mut reader = XmlReader::from_str(&xml_buf);
-    let mut in_text_tag = false;
-    let mut content = String::new();
+    let mut in_paragraph = false;
+    let mut in_text = false;
+    let mut paragraph = String::new();
+    let mut paragraphs: Vec<String> = Vec::new();
     let mut buf = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) if e.name().as_ref() == b"w:t" => in_text_tag = true,
-            Ok(Event::End(ref e)) if e.name().as_ref() == b"w:t" => in_text_tag = false,
-            Ok(Event::Text(ref e)) if in_text_tag => {
+            Ok(Event::Start(ref e)) => match e.name().as_ref() {
+                b"w:p" | b"w:pPr" => in_paragraph = true,
+                b"w:t" => in_text = true,
+                b"w:br" if in_paragraph => paragraph.push('\n'),
+                _ => {}
+            },
+            Ok(Event::End(ref e)) => match e.name().as_ref() {
+                b"w:p" => {
+                    if !paragraph.trim().is_empty() {
+                        paragraphs.push(paragraph.trim().to_string());
+                    }
+                    paragraph.clear();
+                    in_paragraph = false;
+                }
+                b"w:t" => in_text = false,
+                _ => {}
+            },
+            Ok(Event::Text(ref e)) if in_text => {
                 if let Ok(text) = e.unescape() {
-                    content.push_str(&text);
+                    paragraph.push_str(&text);
                 }
             }
             Ok(Event::Eof) => break,
@@ -101,6 +118,7 @@ pub fn read_docx_file(path: &Path) -> Result<TextDocument> {
         buf.clear();
     }
 
+    let content = paragraphs.join("\n\n");
     if content.is_empty() {
         anyhow::bail!("no text content found in docx {}", path.display());
     }
@@ -212,7 +230,8 @@ fn is_chapter_title(line: &str) -> bool {
     pattern.is_match(line)
 }
 
-fn make_docx(content: &str) -> Vec<u8> {
+fn make_docx(paragraphs: &[&str]) -> Vec<u8> {
+    use std::fmt::Write;
     use zip::write::SimpleFileOptions;
     let opts = SimpleFileOptions::default();
     let mut buf = std::io::Cursor::new(Vec::new());
@@ -228,19 +247,16 @@ fn make_docx(content: &str) -> Vec<u8> {
         .unwrap();
     zip.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"></Relationships>").unwrap();
     zip.start_file("word/document.xml", opts).unwrap();
-    zip.write_all(
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    let mut body = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:body>
-    <w:p><w:r><w:t>{}</w:t></w:r></w:p>
-  </w:body>
-</w:document>"#,
-            content
-        )
-        .as_bytes(),
-    )
-    .unwrap();
+  <w:body>"#,
+    );
+    for para in paragraphs {
+        let _ = write!(body, "    <w:p><w:r><w:t>{}</w:t></w:r></w:p>\n", para);
+    }
+    body.push_str("  </w:body>\n</w:document>");
+    zip.write_all(body.as_bytes()).unwrap();
     zip.finish().unwrap();
     buf.into_inner()
 }
@@ -251,7 +267,7 @@ mod tests {
 
     #[test]
     fn parses_docx_content() {
-        let docx = make_docx("第一章 雨夜\n\n林澈推开木门。");
+        let docx = make_docx(&["第一章 雨夜", "林澈推开木门。"]);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.docx");
         std::fs::write(&path, docx).unwrap();
@@ -263,7 +279,7 @@ mod tests {
 
     #[test]
     fn parses_docx_with_chapters() {
-        let docx = make_docx("第一章 雨夜\n林澈醒来。\n第二章 钟声\n钟声响了。");
+        let docx = make_docx(&["第一章 雨夜", "林澈醒来。", "第二章 钟声", "钟声响了。"]);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.docx");
         std::fs::write(&path, docx).unwrap();
@@ -271,6 +287,20 @@ mod tests {
         assert_eq!(doc.chapters.len(), 2);
         assert_eq!(doc.chapters[0].title, "第一章 雨夜");
         assert_eq!(doc.chapters[1].title, "第二章 钟声");
+    }
+
+    #[test]
+    fn parses_docx_preserves_paragraphs() {
+        let docx = make_docx(&["第一段。", "第二段。", "第三段。"]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.docx");
+        std::fs::write(&path, docx).unwrap();
+        let doc = parse_document(&path).unwrap();
+        assert!(doc.content.contains("第一段。"));
+        assert!(doc.content.contains("第二段。"));
+        assert!(doc.content.contains("第三段。"));
+        // Paragraphs should be separated by double newlines
+        assert!(doc.content.contains("第一段。\n\n第二段。"));
     }
 
     #[test]
