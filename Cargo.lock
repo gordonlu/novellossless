@@ -2406,6 +2406,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "novellossless-repeated"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "novellossless-rules"
 version = "0.1.0"
 dependencies = [

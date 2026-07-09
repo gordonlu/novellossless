@@ -4,6 +4,7 @@ members = [
     "apps/desktop/src-tauri",
     "crates/core",
     "crates/parser",
+    "crates/repeated",
     "crates/profiles",
     "crates/impact",
     "crates/rules",
