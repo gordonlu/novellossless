@@ -2376,6 +2376,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "novellossless-rules"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "novellossless-storage",
+ "regex",
+ "serde_json",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "novellossless-storage"
 version = "0.1.0"
 dependencies = [
@@ -2383,6 +2396,29 @@ dependencies = [
  "chrono",
  "rusqlite",
  "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "novellossless-tasks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "novellossless-storage",
+ "tempfile",
+]
+
+[[package]]
+name = "novellossless-timeline"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "novellossless-storage",
+ "regex",
+ "serde_json",
+ "tempfile",
  "uuid",
 ]
 
