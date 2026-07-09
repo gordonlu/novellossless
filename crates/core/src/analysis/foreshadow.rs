@@ -7,10 +7,6 @@ use std::sync::OnceLock;
 pub struct ForeshadowExtractor;
 
 impl Extractor for ForeshadowExtractor {
-    fn name(&self) -> &'static str {
-        "foreshadow"
-    }
-
     fn extract(&self, chunks: &[ChunkInfo]) -> Vec<Extraction> {
         let markers = [
             "秘密",

@@ -14,10 +14,6 @@ impl PersonExtractor {
 }
 
 impl Extractor for PersonExtractor {
-    fn name(&self) -> &'static str {
-        "person"
-    }
-
     fn extract(&self, chunks: &[ChunkInfo]) -> Vec<Extraction> {
         let mut seen = BTreeMap::<String, CandidateAccumulator>::new();
         let Ok(patterns) = person_patterns() else {
@@ -62,7 +58,6 @@ impl Extractor for PersonExtractor {
                     node_type: "person".to_string(),
                     name,
                     aliases: acc.aliases,
-                    summary: String::new(),
                     occurrence_count: acc.count,
                     first_chunk_id: acc.first_chunk_id,
                     latest_chunk_id: acc.latest_chunk_id,

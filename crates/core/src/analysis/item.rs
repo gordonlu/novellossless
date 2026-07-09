@@ -6,10 +6,6 @@ use std::collections::BTreeMap;
 pub struct ItemExtractor;
 
 impl Extractor for ItemExtractor {
-    fn name(&self) -> &'static str {
-        "item"
-    }
-
     fn extract(&self, chunks: &[ChunkInfo]) -> Vec<Extraction> {
         let mut seen = BTreeMap::new();
         let item_nouns = [
@@ -52,7 +48,6 @@ impl Extractor for ItemExtractor {
                     node_type: "item".to_string(),
                     name,
                     aliases: Vec::new(),
-                    summary: String::new(),
                     occurrence_count: count,
                     first_chunk_id: first,
                     latest_chunk_id: latest,

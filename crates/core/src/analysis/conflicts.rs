@@ -7,10 +7,6 @@ use std::collections::{BTreeMap, HashMap};
 pub struct EyeColorConflictExtractor;
 
 impl Extractor for EyeColorConflictExtractor {
-    fn name(&self) -> &'static str {
-        "eye_color_conflict"
-    }
-
     fn extract(&self, chunks: &[ChunkInfo]) -> Vec<Extraction> {
         let Ok(pattern) = Regex::new(
             r"([\p{Han}]{2,4}).{0,12}(黑色|灰蓝色|蓝色|褐色|金色|红色|琥珀色).{0,8}(?:眼睛|眼眸|眸子)",
@@ -84,10 +80,6 @@ impl Extractor for EyeColorConflictExtractor {
 pub struct RepeatExpressionExtractor;
 
 impl Extractor for RepeatExpressionExtractor {
-    fn name(&self) -> &'static str {
-        "repeat_expression"
-    }
-
     fn extract(&self, chunks: &[ChunkInfo]) -> Vec<Extraction> {
         let watched_terms = ["雨夜", "沉默", "钟声", "秘密", "黑暗"];
         let mut results = Vec::new();

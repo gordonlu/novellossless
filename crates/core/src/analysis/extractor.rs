@@ -1,4 +1,5 @@
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ChunkInfo {
     pub document_id: String,
     pub chunk_id: String,
@@ -15,7 +16,6 @@ pub struct NarrativeNodeCandidate {
     pub node_type: String,
     pub name: String,
     pub aliases: Vec<String>,
-    pub summary: String,
     pub occurrence_count: i64,
     pub first_chunk_id: String,
     pub latest_chunk_id: String,
@@ -51,6 +51,5 @@ pub enum Extraction {
 }
 
 pub trait Extractor {
-    fn name(&self) -> &'static str;
     fn extract(&self, chunks: &[ChunkInfo]) -> Vec<Extraction>;
 }

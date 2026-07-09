@@ -10,7 +10,6 @@ const SUPPORTED: &[&str] = &["txt", "md", "markdown"];
 const DEBOUNCE_MS: u64 = 800;
 
 pub struct FileWatcher {
-    project_id: String,
     root: PathBuf,
     watcher: Option<RecommendedWatcher>,
     running: Arc<Mutex<bool>>,
@@ -74,7 +73,6 @@ impl FileWatcher {
         });
 
         Ok(Self {
-            project_id: project_id.to_string(),
             root: root.to_path_buf(),
             watcher: Some(watcher),
             running,
@@ -91,9 +89,6 @@ impl FileWatcher {
         }
     }
 
-    pub fn is_running(&self) -> bool {
-        self.running.lock().map(|r| *r).unwrap_or(false)
-    }
 }
 
 fn is_supported(path: &Path) -> bool {

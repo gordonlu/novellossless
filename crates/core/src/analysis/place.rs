@@ -6,10 +6,6 @@ use std::collections::BTreeMap;
 pub struct PlaceExtractor;
 
 impl Extractor for PlaceExtractor {
-    fn name(&self) -> &'static str {
-        "place"
-    }
-
     fn extract(&self, chunks: &[ChunkInfo]) -> Vec<Extraction> {
         let mut seen = BTreeMap::new();
         let suffix_patterns = [
@@ -45,7 +41,6 @@ impl Extractor for PlaceExtractor {
                     node_type: "place".to_string(),
                     name,
                     aliases: Vec::new(),
-                    summary: String::new(),
                     occurrence_count: count,
                     first_chunk_id: first,
                     latest_chunk_id: latest,
