@@ -6,7 +6,7 @@ use novellossless_core::{
 };
 use novellossless_storage::{
     ContextPack, ContinuityIssue, FileScanLog, ForeshadowItem, NarrativeNode, Project,
-    ProjectChunk, ProjectSummary, RevisionRecord, SearchHit,
+    ProjectChunk, ProjectSummary, RevisionRecord, SearchHit, TimelineEvent,
 };
 use serde::Serialize;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -250,6 +250,32 @@ struct RevisionRecordDto {
     chunks_modified: i64,
     diff_json: Option<String>,
     created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorldRuleDto {
+    id: String,
+    name: String,
+    description: String,
+    rule_type: String,
+    keywords: Vec<String>,
+    positive: bool,
+    confidence: i32,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RevisionTaskDto {
+    id: String,
+    project_id: String,
+    title: String,
+    task_type: String,
+    priority: String,
+    status: String,
+    created_at: String,
+    notes: String,
 }
 
 struct WatcherState(Mutex<Option<crate::watcher::FileWatcher>>);
@@ -498,6 +524,112 @@ fn incremental_scan(app: tauri::AppHandle, project_id: String) -> Result<ScanRes
 }
 
 #[tauri::command]
+fn list_rules(app: tauri::AppHandle, project_id: String) -> Result<Vec<WorldRuleDto>, String> {
+    let core = open_core(&app)?;
+    let rules = core
+        .storage
+        .list_rules(&project_id)
+        .map_err(to_command_error)?;
+    Ok(rules
+        .into_iter()
+        .map(|r| {
+            let keywords: Vec<String> = serde_json::from_str(&r.keywords_json).unwrap_or_default();
+            WorldRuleDto {
+                id: r.id,
+                name: r.name,
+                description: r.description,
+                rule_type: r.rule_type,
+                keywords,
+                positive: r.positive,
+                confidence: r.confidence,
+                status: r.status,
+            }
+        })
+        .collect())
+}
+
+#[tauri::command]
+fn create_rule(
+    app: tauri::AppHandle,
+    project_id: String,
+    name: String,
+    description: String,
+    rule_type: String,
+    keywords: Vec<String>,
+    positive: bool,
+) -> Result<(), String> {
+    let core = open_core(&app)?;
+    let now = chrono::Utc::now().to_rfc3339();
+    core.storage
+        .upsert_rule(&novellossless_storage::WorldRule {
+            id: uuid::Uuid::new_v4().to_string(),
+            project_id,
+            name,
+            description,
+            rule_type,
+            keywords_json: serde_json::to_string(&keywords).unwrap_or_default(),
+            positive,
+            source_chunk_id: None,
+            confidence: 100,
+            status: "active".to_string(),
+            created_at: now.clone(),
+            updated_at: now,
+        })
+        .map_err(to_command_error)
+}
+
+#[tauri::command]
+fn delete_rule(app: tauri::AppHandle, rule_id: String) -> Result<(), String> {
+    let core = open_core(&app)?;
+    core.storage.delete_rule(&rule_id).map_err(to_command_error)
+}
+
+#[tauri::command]
+fn list_tasks(app: tauri::AppHandle, project_id: String) -> Result<Vec<RevisionTaskDto>, String> {
+    let core = open_core(&app)?;
+    let tasks = core
+        .storage
+        .list_tasks(&project_id)
+        .map_err(to_command_error)?;
+    Ok(tasks
+        .into_iter()
+        .map(|t| RevisionTaskDto {
+            id: t.id,
+            project_id: t.project_id,
+            title: t.title,
+            task_type: t.task_type,
+            priority: t.priority,
+            status: t.status,
+            created_at: t.created_at,
+            notes: t.notes,
+        })
+        .collect())
+}
+
+#[tauri::command]
+fn update_task_status(
+    app: tauri::AppHandle,
+    task_id: String,
+    status: String,
+) -> Result<(), String> {
+    let core = open_core(&app)?;
+    core.storage
+        .update_task_status(&task_id, &status)
+        .map_err(to_command_error)
+}
+
+#[tauri::command]
+fn list_timeline_events(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<Vec<TimelineEvent>, String> {
+    let core = open_core(&app)?;
+    core.storage
+        .list_timeline_events(&project_id)
+        .map_err(to_command_error)
+}
+
+#[tauri::command]
 fn list_file_scans(
     app: tauri::AppHandle,
     project_id: String,
@@ -694,6 +826,12 @@ pub fn run() {
             list_candidates,
             list_foreshadows,
             list_issues,
+            list_rules,
+            create_rule,
+            delete_rule,
+            list_tasks,
+            update_task_status,
+            list_timeline_events,
             update_candidate_status,
             update_foreshadow_status,
             update_issue_status,

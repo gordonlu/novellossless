@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::Serialize;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,7 +238,7 @@ pub struct WorldRule {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TimelineEvent {
     pub id: String,
     pub project_id: String,
@@ -1501,14 +1502,22 @@ impl Storage {
         )?;
         let rows = stmt.query_map(params![project_id], |row| {
             Ok(WorldRule {
-                id: row.get(0)?, project_id: row.get(1)?, name: row.get(2)?,
-                description: row.get(3)?, rule_type: row.get(4)?, keywords_json: row.get(5)?,
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                rule_type: row.get(4)?,
+                keywords_json: row.get(5)?,
                 positive: row.get::<_, i32>(6)? != 0,
-                source_chunk_id: row.get(7)?, confidence: row.get(8)?, status: row.get(9)?,
-                created_at: row.get(10)?, updated_at: row.get(11)?,
+                source_chunk_id: row.get(7)?,
+                confidence: row.get(8)?,
+                status: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn get_rule(&self, id: &str) -> Result<Option<WorldRule>> {
@@ -1527,22 +1536,32 @@ impl Storage {
     }
 
     pub fn delete_rule(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM world_rules WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM world_rules WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn delete_project_rules(&self, project_id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM world_rules WHERE project_id = ?1", params![project_id])?;
+        self.conn.execute(
+            "DELETE FROM world_rules WHERE project_id = ?1",
+            params![project_id],
+        )?;
         Ok(())
     }
 
     pub fn delete_project_timeline_events(&self, project_id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM timeline_events WHERE project_id = ?1", params![project_id])?;
+        self.conn.execute(
+            "DELETE FROM timeline_events WHERE project_id = ?1",
+            params![project_id],
+        )?;
         Ok(())
     }
 
     pub fn delete_project_tasks(&self, project_id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM revision_tasks WHERE project_id = ?1", params![project_id])?;
+        self.conn.execute(
+            "DELETE FROM revision_tasks WHERE project_id = ?1",
+            params![project_id],
+        )?;
         Ok(())
     }
 
@@ -1567,16 +1586,23 @@ impl Storage {
         )?;
         let rows = stmt.query_map(params![project_id], |row| {
             Ok(TimelineEvent {
-                id: row.get(0)?, project_id: row.get(1)?, chunk_id: row.get(2)?,
-                chunk_index: row.get(3)?, document_path: row.get(4)?, title: row.get(5)?,
-                order_index: row.get(6)?, time_expression: row.get(7)?,
-                estimated_order: row.get(8)?, participants_json: row.get(9)?,
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                chunk_id: row.get(2)?,
+                chunk_index: row.get(3)?,
+                document_path: row.get(4)?,
+                title: row.get(5)?,
+                order_index: row.get(6)?,
+                time_expression: row.get(7)?,
+                estimated_order: row.get(8)?,
+                participants_json: row.get(9)?,
                 location: row.get(10)?,
                 is_flashback: row.get::<_, i32>(11)? != 0,
                 confidence: row.get(12)?,
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn create_task(&self, task: &NewRevisionTask) -> Result<String> {
@@ -1612,15 +1638,23 @@ impl Storage {
         )?;
         let rows = stmt.query_map(params![project_id], |row| {
             Ok(RevisionTask {
-                id: row.get(0)?, project_id: row.get(1)?, title: row.get(2)?,
-                task_type: row.get(3)?, priority: row.get(4)?,
-                source_issue_id: row.get(5)?, source_foreshadow_id: row.get(6)?,
-                related_chunks_json: row.get(7)?, status: row.get(8)?,
-                created_at: row.get(9)?, updated_at: row.get(10)?,
-                resolved_at: row.get(11)?, notes: row.get(12)?,
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                title: row.get(2)?,
+                task_type: row.get(3)?,
+                priority: row.get(4)?,
+                source_issue_id: row.get(5)?,
+                source_foreshadow_id: row.get(6)?,
+                related_chunks_json: row.get(7)?,
+                status: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+                resolved_at: row.get(11)?,
+                notes: row.get(12)?,
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn get_task(&self, id: &str) -> Result<Option<RevisionTask>> {
@@ -2059,11 +2093,18 @@ mod tests {
     fn stores_and_retrieves_rules() -> Result<()> {
         let (storage, pid) = test_storage_with_project("rules_test")?;
         storage.upsert_rule(&WorldRule {
-            id: "r1".into(), project_id: pid.clone(),
-            name: "魔法不能凭空制造生命".into(), description: "禁止用魔法创造生命".into(),
-            rule_type: "world".into(), keywords_json: r#"["魔法","生命","创造"]"#.into(),
-            positive: true, source_chunk_id: None, confidence: 100,
-            status: "active".into(), created_at: "now".into(), updated_at: "now".into(),
+            id: "r1".into(),
+            project_id: pid.clone(),
+            name: "魔法不能凭空制造生命".into(),
+            description: "禁止用魔法创造生命".into(),
+            rule_type: "world".into(),
+            keywords_json: r#"["魔法","生命","创造"]"#.into(),
+            positive: true,
+            source_chunk_id: None,
+            confidence: 100,
+            status: "active".into(),
+            created_at: "now".into(),
+            updated_at: "now".into(),
         })?;
         let rules = storage.list_rules(&pid)?;
         assert_eq!(rules.len(), 1);
@@ -2078,11 +2119,19 @@ mod tests {
         let chunks = storage.document_chunks(&doc_id)?;
         let chunk_id = chunks[0].chunk_id.clone();
         storage.upsert_timeline_event(&TimelineEvent {
-            id: "t1".into(), project_id: pid.clone(), chunk_id: chunk_id,
-            chunk_index: 0, document_path: "002.txt".into(), title: "第一章".into(),
-            order_index: 1, time_expression: "三天后".into(), estimated_order: Some(3),
-            participants_json: r#"["林澈"]"#.into(), location: "长安".into(),
-            is_flashback: false, confidence: 50,
+            id: "t1".into(),
+            project_id: pid.clone(),
+            chunk_id: chunk_id,
+            chunk_index: 0,
+            document_path: "002.txt".into(),
+            title: "第一章".into(),
+            order_index: 1,
+            time_expression: "三天后".into(),
+            estimated_order: Some(3),
+            participants_json: r#"["林澈"]"#.into(),
+            location: "长安".into(),
+            is_flashback: false,
+            confidence: 50,
         })?;
         let events = storage.list_timeline_events(&pid)?;
         assert_eq!(events.len(), 1);
@@ -2094,9 +2143,14 @@ mod tests {
     fn creates_and_lists_tasks() -> Result<()> {
         let (storage, pid) = test_storage_with_project("tasks_test")?;
         let id = storage.create_task(&NewRevisionTask {
-            project_id: pid.clone(), title: "检查战力倒退".into(), task_type: "conflict".into(),
-            priority: "high".into(), source_issue_id: None, source_foreshadow_id: None,
-            related_chunks_json: "[]".into(), notes: String::new(),
+            project_id: pid.clone(),
+            title: "检查战力倒退".into(),
+            task_type: "conflict".into(),
+            priority: "high".into(),
+            source_issue_id: None,
+            source_foreshadow_id: None,
+            related_chunks_json: "[]".into(),
+            notes: String::new(),
         })?;
         let tasks = storage.list_tasks(&pid)?;
         assert_eq!(tasks.len(), 1);

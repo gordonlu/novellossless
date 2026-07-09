@@ -20,19 +20,20 @@ use novellossless_parser::parse_document;
 use novellossless_storage::{
     ContextPack, ContinuityIssue, ForeshadowItem, NarrativeNode, NewChunk, NewContinuityIssue,
     NewDocument, NewForeshadowItem, NewNarrativeNode, NewProfileMetric, Project, ProjectChunk,
-    ProjectSummary, SearchHit, Storage,
+    ProjectSummary, RevisionTask, SearchHit, Storage,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 pub struct NovelCore {
-    storage: Storage,
+    pub storage: Storage,
     profiles_root: PathBuf,
     profile_manifests: Vec<ProfileManifest>,
     extractor_rules: ExtractorRules,
     people_config: PeopleConfig,
     default_rules: ProfileRules,
+    ai_provider: Box<dyn novellossless_ai::AiProvider>,
 }
 
 pub trait ProgressReporter {
@@ -137,6 +138,7 @@ impl NovelCore {
             extractor_rules: analysis_rules.extractors,
             people_config: analysis_rules.people,
             default_rules,
+            ai_provider: Box::new(novellossless_ai::NoopProvider),
         };
         core.seed_default_settings().ok();
         Ok(core)
@@ -176,6 +178,7 @@ impl NovelCore {
             extractor_rules: analysis_rules.extractors,
             people_config: analysis_rules.people,
             default_rules,
+            ai_provider: Box::new(novellossless_ai::NoopProvider),
         }
     }
 
@@ -385,6 +388,21 @@ impl NovelCore {
                                     diff.modified.len() as i64,
                                     diff_json.as_deref(),
                                 );
+
+                                // Impact analysis
+                                if !diff.added.is_empty()
+                                    || !diff.removed.is_empty()
+                                    || !diff.modified.is_empty()
+                                {
+                                    if let Ok(new_pc) = self.storage.document_chunks(&doc_id) {
+                                        let _ = novellossless_impact::ImpactAnalyzer::analyze(
+                                            project_id,
+                                            &old_chunks,
+                                            &new_pc,
+                                            &self.storage,
+                                        );
+                                    }
+                                }
                             }
                             Err(e) => {
                                 progress.error(&relative, &e.to_string());
@@ -536,6 +554,21 @@ impl NovelCore {
                                 diff.modified.len() as i64,
                                 diff_json.as_deref(),
                             );
+
+                            // Impact analysis
+                            if !diff.added.is_empty()
+                                || !diff.removed.is_empty()
+                                || !diff.modified.is_empty()
+                            {
+                                if let Ok(new_pc) = self.storage.document_chunks(&doc_id) {
+                                    let _ = novellossless_impact::ImpactAnalyzer::analyze(
+                                        project_id,
+                                        &old_chunks,
+                                        &new_pc,
+                                        &self.storage,
+                                    );
+                                }
+                            }
                         }
                         Err(_) => result.failed = 1,
                     }
@@ -585,6 +618,10 @@ impl NovelCore {
 
     pub fn list_issues(&self, project_id: &str, limit: i64) -> Result<Vec<ContinuityIssue>> {
         self.storage.list_continuity_issues(project_id, limit)
+    }
+
+    pub fn list_tasks(&self, project_id: &str) -> Result<Vec<RevisionTask>> {
+        self.storage.list_tasks(project_id)
     }
 
     pub fn document_tree(
@@ -972,6 +1009,52 @@ impl NovelCore {
         self.storage
             .upsert_foreshadow_items(project_id, &foreshadows)?;
         self.storage.upsert_continuity_issues(project_id, &issues)?;
+
+        // Rules integration
+        if !self.profile_manifests.is_empty() {
+            let _ = novellossless_rules::RuleEngine::extract_candidates(
+                project_id,
+                &chunks,
+                &self.storage,
+            );
+            if let Ok(rules) = self.storage.list_rules(project_id) {
+                let rule_issues = novellossless_rules::RuleEngine::check_conflicts(&chunks, &rules);
+                if !rule_issues.is_empty() {
+                    if let Err(e) = self
+                        .storage
+                        .upsert_continuity_issues(project_id, &rule_issues)
+                    {
+                        eprintln!("warning: rule conflict upsert failed: {e}");
+                    }
+                }
+            }
+        }
+
+        // Timeline extraction
+        let _ = novellossless_timeline::TimelineEngine::extract(project_id, &chunks, &self.storage);
+        if let Ok(events) = self.storage.list_timeline_events(project_id) {
+            let time_issues = novellossless_timeline::TimelineEngine::check(&events, &chunks);
+            if !time_issues.is_empty() {
+                if let Err(e) = self
+                    .storage
+                    .upsert_continuity_issues(project_id, &time_issues)
+                {
+                    eprintln!("warning: timeline issue upsert failed: {e}");
+                }
+            }
+        }
+
+        // Task auto-creation
+        if let Ok(issues) = self.storage.list_continuity_issues(project_id, 100) {
+            if let Ok(foreshadows) = self.storage.list_foreshadow_items(project_id, 100) {
+                let _ = novellossless_tasks::TaskManager::auto_create_from_issues(
+                    project_id,
+                    &issues,
+                    &foreshadows,
+                    &self.storage,
+                );
+            }
+        }
 
         if let Err(e) = self.compute_profile_metrics(project_id) {
             eprintln!("warning: profile metrics failed: {e}");

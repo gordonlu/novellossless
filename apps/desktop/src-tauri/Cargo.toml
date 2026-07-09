@@ -20,3 +20,6 @@ notify = "8"
 serde.workspace = true
 tauri = { workspace = true, features = ["tray-icon"] }
 tauri-plugin-dialog.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+serde_json.workspace = true

@@ -72,6 +72,10 @@ enum Command {
         #[arg(long)]
         project_id: Option<String>,
     },
+    Tasks {
+        #[arg(long)]
+        project_id: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -176,6 +180,14 @@ fn main() -> Result<()> {
         } => {
             let pack = core.build_context_pack(&project_id, &query, limit)?;
             println!("{}", pack.content);
+        }
+        Command::Tasks { project_id } => {
+            for task in core.list_tasks(&project_id)? {
+                println!(
+                    "{} | {} | {} | {}",
+                    task.priority, task.title, task.status, task.created_at
+                );
+            }
         }
         Command::Profiles { project_id } => {
             let available = core.get_available_profiles()?;

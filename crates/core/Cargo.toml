@@ -17,6 +17,11 @@ serde_json.workspace = true
 toml = { workspace = true }
 sha2.workspace = true
 walkdir.workspace = true
+novellossless-rules = { path = "../rules" }
+novellossless-timeline = { path = "../timeline" }
+novellossless-tasks = { path = "../tasks" }
+novellossless-impact = { path = "../impact" }
+novellossless-ai = { path = "../ai" }
 
 [dev-dependencies]
 tempfile.workspace = true
