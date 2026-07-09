@@ -1,5 +1,5 @@
-pub mod types;
 mod detectors;
+pub mod types;
 
 pub use detectors::Detector;
 pub use types::{ChunkInfo, EvidenceItem, RepeatedIssue};
@@ -10,7 +10,9 @@ pub struct RepeatedDescriptionEngine {
 
 impl RepeatedDescriptionEngine {
     pub fn new() -> Self {
-        Self { detectors: Vec::new() }
+        Self {
+            detectors: Vec::new(),
+        }
     }
 
     pub fn with(mut self, detector: Box<dyn Detector>) -> Self {
@@ -28,8 +30,10 @@ impl RepeatedDescriptionEngine {
         }
         results
     }
+}
 
-    pub fn default() -> Self {
+impl Default for RepeatedDescriptionEngine {
+    fn default() -> Self {
         Self {
             detectors: vec![
                 Box::new(detectors::SimilarParagraphs::default()),
@@ -39,11 +43,5 @@ impl RepeatedDescriptionEngine {
                 Box::new(detectors::PsychDensity::default()),
             ],
         }
-    }
-}
-
-impl Default for RepeatedDescriptionEngine {
-    fn default() -> Self {
-        Self::default()
     }
 }

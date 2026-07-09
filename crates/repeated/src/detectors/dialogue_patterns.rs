@@ -1,5 +1,5 @@
-use crate::types::{ChunkInfo, RepeatedIssue};
 use crate::Detector;
+use crate::types::{ChunkInfo, RepeatedIssue};
 
 pub struct DialoguePatterns;
 
