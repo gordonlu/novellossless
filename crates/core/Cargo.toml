@@ -22,6 +22,7 @@ novellossless-timeline = { path = "../timeline" }
 novellossless-tasks = { path = "../tasks" }
 novellossless-impact = { path = "../impact" }
 novellossless-ai = { path = "../ai" }
+novellossless-repeated = { path = "../repeated" }
 
 [dev-dependencies]
 tempfile.workspace = true

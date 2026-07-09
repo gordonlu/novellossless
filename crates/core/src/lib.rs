@@ -17,6 +17,7 @@ use crate::profile::{
 
 use anyhow::{Context, Result};
 use novellossless_parser::parse_document;
+use novellossless_repeated::{ChunkInfo as RepeatedChunkInfo, RepeatedDescriptionEngine};
 use novellossless_storage::{
     ContextPack, ContinuityIssue, ForeshadowItem, NarrativeNode, NewChunk, NewContinuityIssue,
     NewDocument, NewForeshadowItem, NewNarrativeNode, NewProfileMetric, Project, ProjectChunk,
@@ -924,6 +925,34 @@ impl NovelCore {
         self.storage.upsert_narrative_nodes(project_id, &items)?;
         self.storage
             .upsert_foreshadow_items(project_id, &foreshadows)?;
+
+        // Repeated description detection
+        if !chunks.is_empty() {
+            let repeated_chunks: Vec<RepeatedChunkInfo> = chunks
+                .iter()
+                .map(|c| RepeatedChunkInfo {
+                    chunk_id: c.chunk_id.clone(),
+                    document_id: c.document_id.clone(),
+                    document_path: c.document_path.clone(),
+                    chapter_title: c.title.clone(),
+                    chunk_index: c.chunk_index,
+                    content: c.content.clone(),
+                })
+                .collect();
+            let engine = RepeatedDescriptionEngine::default();
+            let repeated_issues = engine.detect(&repeated_chunks);
+            for ri in repeated_issues {
+                issues.push(NewContinuityIssue {
+                    issue_type: format!("repeated_{}", ri.issue_type),
+                    severity: ri.severity,
+                    title: ri.title,
+                    description: ri.description,
+                    evidence_json: serde_json::to_string(&ri.evidence).unwrap_or_default(),
+                    suggested_actions_json: ri.suggested_action.clone(),
+                });
+            }
+        }
+
         self.storage.upsert_continuity_issues(project_id, &issues)?;
 
         // Rules integration
@@ -1565,6 +1594,40 @@ mod tests {
         let project = core.import_project("rules_test", &novel_dir)?;
         let rules = core.list_rules(&project.id)?;
         assert!(rules.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn repeated_description_detection_integration() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let db_path = dir.path().join("test.db");
+        let core = NovelCore::open(&db_path)?;
+
+        let project = core.import_project("test", dir.path())?;
+
+        let file1 = dir.path().join("ch1.txt");
+        let file2 = dir.path().join("ch2.txt");
+        std::fs::write(
+            &file1,
+            "第一章\n\n林澈推开沉重的木门走进房间，雨水从屋檐滴落。他拿起剑，轻轻擦拭。",
+        )?;
+        std::fs::write(
+            &file2,
+            "第二章\n\n林澈推开沉重的木门走进房间，雨水从屋檐滴落。他拿起剑，轻轻擦拭。",
+        )?;
+
+        core.scan_project(&project.id)?;
+
+        let issues = core.list_issues(&project.id, 50)?;
+        let repeated_count = issues
+            .iter()
+            .filter(|i| i.issue_type.starts_with("repeated_"))
+            .count();
+        assert!(
+            repeated_count > 0,
+            "should detect at least one repeated description issue, got {}",
+            repeated_count
+        );
         Ok(())
     }
 }

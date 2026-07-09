@@ -54,10 +54,16 @@ impl Detector for RepeatedActions {
                 let mut search_from = 0;
                 while let Some(pos) = chunk.content[search_from..].find(verb) {
                     let abs_pos = search_from + pos;
-                    let start = abs_pos.saturating_sub(10);
-                    let end = (abs_pos + verb.len() + 15).min(chunk.content.len());
-                    let snippet = &chunk.content[start..end];
-                    chunk_actions[ci].push((verb.to_string(), snippet.to_string()));
+                    let start_char = chunk.content[..abs_pos].chars().count().saturating_sub(10);
+                    let end_char =
+                        (start_char + verb.chars().count() + 15).min(chunk.content.chars().count());
+                    let snippet: String = chunk
+                        .content
+                        .chars()
+                        .skip(start_char)
+                        .take(end_char - start_char)
+                        .collect();
+                    chunk_actions[ci].push((verb.to_string(), snippet));
                     search_from = abs_pos + verb.len();
                 }
             }
