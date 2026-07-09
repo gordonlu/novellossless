@@ -1,26 +1,53 @@
-use std::collections::HashMap;
-use crate::types::{ChunkInfo, EvidenceItem, RepeatedIssue};
 use super::Detector;
+use crate::types::{ChunkInfo, EvidenceItem, RepeatedIssue};
+use std::collections::HashMap;
 
 pub struct RepeatedActions {
     min_chunks: usize,
 }
 
 impl Default for RepeatedActions {
-    fn default() -> Self { Self { min_chunks: 4 } }
+    fn default() -> Self {
+        Self { min_chunks: 4 }
+    }
 }
 
-const ACTION_VERBS: &[&str] = &["拿起", "推开", "放下", "抱住", "握住", "拉着",
-    "拍了拍", "点了点头", "摇了摇头", "站起身", "转过身", "低下头", "抬起头",
-    "握紧", "松开", "扔下", "接过", "取出", "收起", "拔出", "插入"];
+const ACTION_VERBS: &[&str] = &[
+    "拿起",
+    "推开",
+    "放下",
+    "抱住",
+    "握住",
+    "拉着",
+    "拍了拍",
+    "点了点头",
+    "摇了摇头",
+    "站起身",
+    "转过身",
+    "低下头",
+    "抬起头",
+    "握紧",
+    "松开",
+    "扔下",
+    "接过",
+    "取出",
+    "收起",
+    "拔出",
+    "插入",
+];
 
 impl Detector for RepeatedActions {
-    fn id(&self) -> &'static str { "repeated_actions" }
+    fn id(&self) -> &'static str {
+        "repeated_actions"
+    }
 
     fn detect(&self, chunks: &[ChunkInfo]) -> Vec<RepeatedIssue> {
-        if chunks.len() < 2 { return Vec::new(); }
+        if chunks.len() < 2 {
+            return Vec::new();
+        }
 
-        let mut chunk_actions: Vec<Vec<(String, String)>> = chunks.iter().map(|_| Vec::new()).collect();
+        let mut chunk_actions: Vec<Vec<(String, String)>> =
+            chunks.iter().map(|_| Vec::new()).collect();
 
         for (ci, chunk) in chunks.iter().enumerate() {
             for verb in ACTION_VERBS {
@@ -41,7 +68,8 @@ impl Detector for RepeatedActions {
             for (verb, _) in actions {
                 let entry = verb_chunks.entry(verb.clone()).or_default();
                 if !entry.iter().any(|e| e.chunk_id == chunks[ci].chunk_id) {
-                    let snippet = actions.iter()
+                    let snippet = actions
+                        .iter()
                         .find(|(v, _)| v == verb)
                         .map(|(_, s)| s.clone())
                         .unwrap_or_default();
@@ -77,15 +105,39 @@ impl Detector for RepeatedActions {
 mod tests {
     use super::*;
     fn chunk(id: &str, content: &str) -> ChunkInfo {
-        ChunkInfo { chunk_id: format!("c{}", id), document_id: "d1".to_string(), document_path: "t.txt".to_string(), chapter_title: format!("Ch{}", id), chunk_index: id.parse().unwrap_or(0), content: content.to_string() }
+        ChunkInfo {
+            chunk_id: format!("c{}", id),
+            document_id: "d1".to_string(),
+            document_path: "t.txt".to_string(),
+            chapter_title: format!("Ch{}", id),
+            chunk_index: id.parse().unwrap_or(0),
+            content: content.to_string(),
+        }
     }
 
     #[test]
     fn detects_repeated_action() {
-        let chunks: Vec<_> = (1..=5).map(|i| chunk(&i.to_string(), &format!("他拿起剑，{}。", if i == 3 { "转身离开" } else { "走向门口" }))).collect();
+        let chunks: Vec<_> = (1..=5)
+            .map(|i| {
+                chunk(
+                    &i.to_string(),
+                    &format!(
+                        "他拿起剑，{}。",
+                        if i == 3 {
+                            "转身离开"
+                        } else {
+                            "走向门口"
+                        }
+                    ),
+                )
+            })
+            .collect();
         let detector = RepeatedActions::default();
         let issues = detector.detect(&chunks);
-        assert!(issues.iter().any(|i| i.issue_type == "action"), "should find repeated action");
+        assert!(
+            issues.iter().any(|i| i.issue_type == "action"),
+            "should find repeated action"
+        );
     }
 
     #[test]
@@ -98,7 +150,17 @@ mod tests {
 
     #[test]
     fn different_actions_no_match() {
-        let chunks: Vec<_> = (1..=5).map(|i| chunk(&i.to_string(), &format!("他{}。", ["拿起剑","推开门","走向窗口","坐在椅上","躺了下来"][i as usize - 1]))).collect();
+        let chunks: Vec<_> = (1..=5)
+            .map(|i| {
+                chunk(
+                    &i.to_string(),
+                    &format!(
+                        "他{}。",
+                        ["拿起剑", "推开门", "走向窗口", "坐在椅上", "躺了下来"][i as usize - 1]
+                    ),
+                )
+            })
+            .collect();
         let detector = RepeatedActions::default();
         let issues = detector.detect(&chunks);
         assert_eq!(issues.len(), 0);
