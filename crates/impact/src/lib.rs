@@ -53,10 +53,15 @@ impl ImpactAnalyzer {
         }
 
         // Create tasks for affected items
-        if !affected_nodes.is_empty() || !affected_foreshadows.is_empty() || !affected_rules.is_empty() {
+        if !affected_nodes.is_empty()
+            || !affected_foreshadows.is_empty()
+            || !affected_rules.is_empty()
+        {
             let summary = format!(
                 "修改影响: {} 个人物/地点/物件, {} 个伏笔, {} 条规则",
-                affected_nodes.len(), affected_foreshadows.len(), affected_rules.len()
+                affected_nodes.len(),
+                affected_foreshadows.len(),
+                affected_rules.len()
             );
             let _ = storage.create_task(&NewRevisionTask {
                 project_id: project_id.to_string(),
@@ -70,7 +75,8 @@ impl ImpactAnalyzer {
                     "affected_nodes": affected_nodes,
                     "affected_foreshadows": affected_foreshadows,
                     "affected_rules": affected_rules,
-                }).to_string(),
+                })
+                .to_string(),
             })?;
 
             return Ok(RevisionImpact {
@@ -108,24 +114,39 @@ mod tests {
         let doc_id = storage.upsert_document_with_chunks(
             &pid,
             &novellossless_storage::NewDocument {
-                path: "001.txt".into(), kind: "text".into(), title: "第一章".into(),
-                chapter_count: 1, content_hash: "h".into(), word_count: 5, encoding: "utf-8".into(),
+                path: "001.txt".into(),
+                kind: "text".into(),
+                title: "第一章".into(),
+                chapter_count: 1,
+                content_hash: "h".into(),
+                word_count: 5,
+                encoding: "utf-8".into(),
             },
             &[novellossless_storage::NewChunk {
-                chunk_index: 0, title: "第一章".into(), start_offset: 0, end_offset: 10,
-                content: "林澈在长安。".into(), content_hash: "ch".into(), word_count: 5,
+                chunk_index: 0,
+                title: "第一章".into(),
+                start_offset: 0,
+                end_offset: 10,
+                content: "林澈在长安。".into(),
+                content_hash: "ch".into(),
+                word_count: 5,
             }],
         )?;
         let chunks = storage.document_chunks(&doc_id)?;
         let chunk_id = chunks[0].chunk_id.clone();
 
-        storage.upsert_narrative_nodes(&pid, &[NewNarrativeNode {
-            node_type: "person".into(), name: "林澈".into(),
-            aliases_json: "[]".into(), occurrence_count: 1,
-            first_chunk_id: chunk_id.clone(),
-            latest_chunk_id: chunk_id.clone(),
-            confidence: 80,
-        }])?;
+        storage.upsert_narrative_nodes(
+            &pid,
+            &[NewNarrativeNode {
+                node_type: "person".into(),
+                name: "林澈".into(),
+                aliases_json: "[]".into(),
+                occurrence_count: 1,
+                first_chunk_id: chunk_id.clone(),
+                latest_chunk_id: chunk_id.clone(),
+                confidence: 80,
+            }],
+        )?;
 
         let impact = ImpactAnalyzer::analyze(&pid, &chunks, &[], &storage)?;
         assert!(!impact.affected_nodes.is_empty());
@@ -139,24 +160,93 @@ mod tests {
         let doc_id = storage.upsert_document_with_chunks(
             &pid,
             &novellossless_storage::NewDocument {
-                path: "001.txt".into(), kind: "text".into(), title: "第一章".into(),
-                chapter_count: 1, content_hash: "h".into(), word_count: 5, encoding: "utf-8".into(),
+                path: "001.txt".into(),
+                kind: "text".into(),
+                title: "第一章".into(),
+                chapter_count: 1,
+                content_hash: "h".into(),
+                word_count: 5,
+                encoding: "utf-8".into(),
             },
             &[novellossless_storage::NewChunk {
-                chunk_index: 0, title: "第一章".into(), start_offset: 0, end_offset: 10,
-                content: "林澈在长安。".into(), content_hash: "ch".into(), word_count: 5,
+                chunk_index: 0,
+                title: "第一章".into(),
+                start_offset: 0,
+                end_offset: 10,
+                content: "林澈在长安。".into(),
+                content_hash: "ch".into(),
+                word_count: 5,
             }],
         )?;
         let old_chunks = storage.document_chunks(&doc_id)?;
         let new_chunks = vec![ProjectChunk {
             document_id: old_chunks[0].document_id.clone(),
             chunk_id: old_chunks[0].chunk_id.clone(),
-            chunk_index: 0, title: "第一章".into(),
+            chunk_index: 0,
+            title: "第一章".into(),
             content: "林澈在长安。".into(),
             ..old_chunks[0].clone()
         }];
         let impact = ImpactAnalyzer::analyze(&pid, &old_chunks, &new_chunks, &storage)?;
         assert!(impact.affected_nodes.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn analyze_empty_chunks() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("empty_impact")?;
+        let impact = ImpactAnalyzer::analyze(&pid, &[], &[], &storage)?;
+        assert!(impact.affected_nodes.is_empty());
+        assert!(impact.affected_foreshadows.is_empty());
+        assert!(impact.affected_rules.is_empty());
+        assert_eq!(impact.summary, "无影响");
+        Ok(())
+    }
+
+    #[test]
+    fn analyze_creates_task_on_impact() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("impact_task_test")?;
+        let doc_id = storage.upsert_document_with_chunks(
+            &pid,
+            &novellossless_storage::NewDocument {
+                path: "001.txt".into(),
+                kind: "text".into(),
+                title: "第一章".into(),
+                chapter_count: 1,
+                content_hash: "h".into(),
+                word_count: 5,
+                encoding: "utf-8".into(),
+            },
+            &[novellossless_storage::NewChunk {
+                chunk_index: 0,
+                title: "第一章".into(),
+                start_offset: 0,
+                end_offset: 10,
+                content: "林澈在长安。".into(),
+                content_hash: "ch".into(),
+                word_count: 5,
+            }],
+        )?;
+        let chunks = storage.document_chunks(&doc_id)?;
+        let chunk_id = chunks[0].chunk_id.clone();
+
+        storage.upsert_narrative_nodes(
+            &pid,
+            &[NewNarrativeNode {
+                node_type: "person".into(),
+                name: "林澈".into(),
+                aliases_json: "[]".into(),
+                occurrence_count: 1,
+                first_chunk_id: chunk_id.clone(),
+                latest_chunk_id: chunk_id.clone(),
+                confidence: 80,
+            }],
+        )?;
+
+        ImpactAnalyzer::analyze(&pid, &chunks, &[], &storage)?;
+        let tasks = storage.list_tasks(&pid)?;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].task_type, "revision_impact");
         Ok(())
     }
 }

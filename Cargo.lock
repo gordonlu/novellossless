@@ -2315,6 +2315,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "novellossless-ai"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "deeplossless",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "novellossless-cli"
 version = "0.1.0"
 dependencies = [
@@ -2329,9 +2339,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "deeplossless",
+ "novellossless-ai",
+ "novellossless-impact",
  "novellossless-parser",
  "novellossless-profiles",
+ "novellossless-rules",
  "novellossless-storage",
+ "novellossless-tasks",
+ "novellossless-timeline",
  "regex",
  "serde",
  "serde_json",
@@ -2346,13 +2361,28 @@ name = "novellossless-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "notify",
  "novellossless-core",
  "novellossless-storage",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "uuid",
+]
+
+[[package]]
+name = "novellossless-impact"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "novellossless-storage",
+ "serde_json",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]
@@ -2395,6 +2425,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "rusqlite",
+ "serde",
  "serde_json",
  "uuid",
 ]
@@ -2404,7 +2435,6 @@ name = "novellossless-tasks"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "novellossless-storage",
  "tempfile",
 ]

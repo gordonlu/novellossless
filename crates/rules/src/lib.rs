@@ -14,7 +14,9 @@ impl RuleEngine {
         storage: &Storage,
     ) -> Result<Vec<String>> {
         let mut created_ids = Vec::new();
-        let prohibition_re = Regex::new(r"([\p{Han}]{2,20})(?:不能|无法|不可|禁止|不得|不允许|从不|从未)([\p{Han}]{2,40})")?;
+        let prohibition_re = Regex::new(
+            r"([\p{Han}]{2,20})(?:不能|无法|不可|禁止|不得|不允许|从不|从未)([\p{Han}]{2,40})",
+        )?;
         let prerequisite_re = Regex::new(r"只有([\p{Han}]{2,20})(?:才|才能)([\p{Han}]{2,40})")?;
         let now = chrono::Utc::now().to_rfc3339();
 
@@ -81,20 +83,24 @@ impl RuleEngine {
             if rule.status != "active" {
                 continue;
             }
-            let keywords: Vec<String> = serde_json::from_str(&rule.keywords_json).unwrap_or_default();
+            let keywords: Vec<String> =
+                serde_json::from_str(&rule.keywords_json).unwrap_or_default();
             if keywords.is_empty() {
                 continue;
             }
 
             for chunk in chunks {
                 // Check if all keywords appear in this chunk
-                let all_keywords_present = keywords.iter().all(|kw| chunk.content.contains(kw.as_str()));
+                let all_keywords_present = keywords
+                    .iter()
+                    .all(|kw| chunk.content.contains(kw.as_str()));
                 if !all_keywords_present {
                     continue;
                 }
 
                 // Check for contradiction words
-                let has_contradiction = contradiction_words.iter()
+                let has_contradiction = contradiction_words
+                    .iter()
                     .any(|cw| chunk.content.contains(cw));
                 if !has_contradiction {
                     continue;
@@ -114,12 +120,14 @@ impl RuleEngine {
                         "rule_name": rule.name,
                         "chunk_id": chunk.chunk_id,
                         "snippet": chunk.content.chars().take(80).collect::<String>(),
-                    })).unwrap_or_default(),
+                    }))
+                    .unwrap_or_default(),
                     suggested_actions_json: serde_json::to_string(&json!([
                         "标记为规则例外",
                         "接受为正式设定变更",
                         "标记为误报"
-                    ])).unwrap_or_default(),
+                    ]))
+                    .unwrap_or_default(),
                 });
             }
         }
@@ -139,7 +147,11 @@ mod tests {
         Ok((storage, project.id))
     }
 
-    fn insert_document_chunk(storage: &Storage, project_id: &str, content: &str) -> Result<ProjectChunk> {
+    fn insert_document_chunk(
+        storage: &Storage,
+        project_id: &str,
+        content: &str,
+    ) -> Result<ProjectChunk> {
         let doc = NewDocument {
             path: "001.txt".into(),
             kind: "novel".into(),
@@ -180,17 +192,30 @@ mod tests {
     #[test]
     fn detects_rule_violation() -> Result<()> {
         let chunks = vec![ProjectChunk {
-            document_id: "d1".into(), chunk_id: "c1".into(), document_path: "001.txt".into(),
-            chunk_index: 0, title: "第一章".into(),
+            document_id: "d1".into(),
+            chunk_id: "c1".into(),
+            document_path: "001.txt".into(),
+            chunk_index: 0,
+            title: "第一章".into(),
             content: "魔法却还是凭空制造了一个生命。".into(),
-            start_offset: 0, end_offset: 16, word_count: 10, content_hash: "h1".into(),
+            start_offset: 0,
+            end_offset: 16,
+            word_count: 10,
+            content_hash: "h1".into(),
         }];
         let rules = vec![WorldRule {
-            id: "r1".into(), project_id: "p1".into(),
-            name: "魔法不能凭空制造生命".into(), description: String::new(),
-            rule_type: "world".into(), keywords_json: r#"["魔法","生命","制造"]"#.into(),
-            positive: true, source_chunk_id: None, confidence: 100,
-            status: "active".into(), created_at: "now".into(), updated_at: "now".into(),
+            id: "r1".into(),
+            project_id: "p1".into(),
+            name: "魔法不能凭空制造生命".into(),
+            description: String::new(),
+            rule_type: "world".into(),
+            keywords_json: r#"["魔法","生命","制造"]"#.into(),
+            positive: true,
+            source_chunk_id: None,
+            confidence: 100,
+            status: "active".into(),
+            created_at: "now".into(),
+            updated_at: "now".into(),
         }];
         let issues = RuleEngine::check_conflicts(&chunks, &rules);
         assert!(!issues.is_empty());
@@ -201,17 +226,90 @@ mod tests {
     #[test]
     fn no_false_positive_on_compliant_text() -> Result<()> {
         let chunks = vec![ProjectChunk {
-            document_id: "d1".into(), chunk_id: "c1".into(), document_path: "001.txt".into(),
-            chunk_index: 0, title: "第一章".into(),
+            document_id: "d1".into(),
+            chunk_id: "c1".into(),
+            document_path: "001.txt".into(),
+            chunk_index: 0,
+            title: "第一章".into(),
             content: "他严格遵循规则，从未用魔法制造生命。".into(),
-            start_offset: 0, end_offset: 18, word_count: 8, content_hash: "h1".into(),
+            start_offset: 0,
+            end_offset: 18,
+            word_count: 8,
+            content_hash: "h1".into(),
         }];
         let rules = vec![WorldRule {
-            id: "r1".into(), project_id: "p1".into(),
-            name: "魔法不能凭空制造生命".into(), description: String::new(),
-            rule_type: "world".into(), keywords_json: r#"["魔法","生命","创造"]"#.into(),
-            positive: true, source_chunk_id: None, confidence: 100,
-            status: "active".into(), created_at: "now".into(), updated_at: "now".into(),
+            id: "r1".into(),
+            project_id: "p1".into(),
+            name: "魔法不能凭空制造生命".into(),
+            description: String::new(),
+            rule_type: "world".into(),
+            keywords_json: r#"["魔法","生命","创造"]"#.into(),
+            positive: true,
+            source_chunk_id: None,
+            confidence: 100,
+            status: "active".into(),
+            created_at: "now".into(),
+            updated_at: "now".into(),
+        }];
+        let issues = RuleEngine::check_conflicts(&chunks, &rules);
+        assert!(issues.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn extract_candidates_empty_chunks() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("empty_extract")?;
+        let ids = RuleEngine::extract_candidates(&pid, &[], &storage)?;
+        assert!(ids.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn check_conflicts_empty_rules() -> Result<()> {
+        let chunks = vec![ProjectChunk {
+            document_id: "d1".into(),
+            chunk_id: "c1".into(),
+            document_path: "001.txt".into(),
+            chunk_index: 0,
+            title: "第一章".into(),
+            content: "魔法却还是凭空制造了一个生命。".into(),
+            start_offset: 0,
+            end_offset: 16,
+            word_count: 10,
+            content_hash: "h1".into(),
+        }];
+        let issues = RuleEngine::check_conflicts(&chunks, &[]);
+        assert!(issues.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn check_conflicts_skips_inactive_rule() -> Result<()> {
+        let chunks = vec![ProjectChunk {
+            document_id: "d1".into(),
+            chunk_id: "c1".into(),
+            document_path: "001.txt".into(),
+            chunk_index: 0,
+            title: "第一章".into(),
+            content: "魔法却还是凭空制造了一个生命。".into(),
+            start_offset: 0,
+            end_offset: 16,
+            word_count: 10,
+            content_hash: "h1".into(),
+        }];
+        let rules = vec![WorldRule {
+            id: "r1".into(),
+            project_id: "p1".into(),
+            name: "魔法不能凭空制造生命".into(),
+            description: String::new(),
+            rule_type: "world".into(),
+            keywords_json: r#"["魔法","生命","制造"]"#.into(),
+            positive: true,
+            source_chunk_id: None,
+            confidence: 100,
+            status: "candidate".into(),
+            created_at: "now".into(),
+            updated_at: "now".into(),
         }];
         let issues = RuleEngine::check_conflicts(&chunks, &rules);
         assert!(issues.is_empty());

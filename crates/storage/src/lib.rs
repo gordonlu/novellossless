@@ -528,6 +528,8 @@ impl Storage {
             "#,
         )?;
 
+        self.conn.pragma_update(None, "user_version", 1)?;
+
         Ok(())
     }
 
@@ -2158,6 +2160,148 @@ mod tests {
         storage.update_task_status(&id, "resolved")?;
         let task = storage.get_task(&id)?.expect("exists");
         assert_eq!(task.status, "resolved");
+        Ok(())
+    }
+
+    #[test]
+    fn get_nonexistent_rule_returns_none() -> Result<()> {
+        let storage = test_storage()?;
+        let rule = storage.get_rule("nonexistent")?;
+        assert!(rule.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn delete_nonexistent_rule_is_ok() -> Result<()> {
+        let storage = test_storage()?;
+        storage.delete_rule("nonexistent")?;
+        Ok(())
+    }
+
+    #[test]
+    fn list_tasks_empty_project() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("empty_tasks")?;
+        let tasks = storage.list_tasks(&pid)?;
+        assert!(tasks.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn create_task_duplicate_source_id() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("dup_source")?;
+        let id1 = storage.create_task(&NewRevisionTask {
+            project_id: pid.clone(),
+            title: "检查战力倒退".into(),
+            task_type: "conflict".into(),
+            priority: "high".into(),
+            source_issue_id: Some("issue1".into()),
+            source_foreshadow_id: None,
+            related_chunks_json: "[]".into(),
+            notes: String::new(),
+        })?;
+        let id2 = storage.create_task(&NewRevisionTask {
+            project_id: pid.clone(),
+            title: "另一个任务".into(),
+            task_type: "foreshadow".into(),
+            priority: "medium".into(),
+            source_issue_id: Some("issue1".into()),
+            source_foreshadow_id: None,
+            related_chunks_json: "[]".into(),
+            notes: String::new(),
+        })?;
+        assert_ne!(id1, id2, "should create separate tasks");
+        let tasks = storage.list_tasks(&pid)?;
+        assert_eq!(tasks.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn timeline_event_empty_participants() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("empty_part")?;
+        let doc_id = seed_document(&storage, &pid, "001.txt")?;
+        let chunks = storage.document_chunks(&doc_id)?;
+        let chunk_id = chunks[0].chunk_id.clone();
+        storage.upsert_timeline_event(&TimelineEvent {
+            id: "t1".into(),
+            project_id: pid.clone(),
+            chunk_id,
+            chunk_index: 0,
+            document_path: "001.txt".into(),
+            title: "第一章".into(),
+            order_index: 1,
+            time_expression: String::new(),
+            estimated_order: None,
+            participants_json: String::new(),
+            location: String::new(),
+            is_flashback: false,
+            confidence: 50,
+        })?;
+        let events = storage.list_timeline_events(&pid)?;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].participants_json, "");
+        Ok(())
+    }
+
+    #[test]
+    fn search_handles_empty_query() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("empty_search")?;
+        let hits_empty = storage.search(&pid, "", 10)?;
+        assert!(hits_empty.is_empty());
+        let hits_whitespace = storage.search(&pid, "  ", 10)?;
+        assert!(hits_whitespace.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn search_handles_special_characters() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("special_search")?;
+        seed_document(&storage, &pid, "001.txt")?;
+        let hits_pct = storage.search(&pid, "%", 10)?;
+        let hits_underscore = storage.search(&pid, "_", 10)?;
+        let hits_backslash = storage.search(&pid, "\\", 10)?;
+        assert!(hits_pct.is_empty());
+        assert!(hits_underscore.is_empty());
+        assert!(hits_backslash.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn upsert_timeline_event_duplicate_id() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("dup_event")?;
+        let doc_id = seed_document(&storage, &pid, "001.txt")?;
+        let chunks = storage.document_chunks(&doc_id)?;
+        let chunk_id = chunks[0].chunk_id.clone();
+        storage.upsert_timeline_event(&TimelineEvent {
+            id: "same_id".into(),
+            project_id: pid.clone(),
+            chunk_id: chunk_id.clone(),
+            chunk_index: 0,
+            document_path: "001.txt".into(),
+            title: "第一章".into(),
+            order_index: 1,
+            time_expression: String::new(),
+            estimated_order: None,
+            participants_json: "[]".into(),
+            location: String::new(),
+            is_flashback: false,
+            confidence: 50,
+        })?;
+        let result = storage.upsert_timeline_event(&TimelineEvent {
+            id: "same_id".into(),
+            project_id: pid.clone(),
+            chunk_id,
+            chunk_index: 0,
+            document_path: "001.txt".into(),
+            title: "第一章".into(),
+            order_index: 1,
+            time_expression: String::new(),
+            estimated_order: None,
+            participants_json: "[]".into(),
+            location: String::new(),
+            is_flashback: false,
+            confidence: 50,
+        });
+        assert!(result.is_err(), "duplicate PK should fail");
         Ok(())
     }
 }

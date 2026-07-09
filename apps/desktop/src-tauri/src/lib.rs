@@ -526,10 +526,7 @@ fn incremental_scan(app: tauri::AppHandle, project_id: String) -> Result<ScanRes
 #[tauri::command]
 fn list_rules(app: tauri::AppHandle, project_id: String) -> Result<Vec<WorldRuleDto>, String> {
     let core = open_core(&app)?;
-    let rules = core
-        .storage
-        .list_rules(&project_id)
-        .map_err(to_command_error)?;
+    let rules = core.list_rules(&project_id).map_err(to_command_error)?;
     Ok(rules
         .into_iter()
         .map(|r| {
@@ -560,37 +557,33 @@ fn create_rule(
 ) -> Result<(), String> {
     let core = open_core(&app)?;
     let now = chrono::Utc::now().to_rfc3339();
-    core.storage
-        .upsert_rule(&novellossless_storage::WorldRule {
-            id: uuid::Uuid::new_v4().to_string(),
-            project_id,
-            name,
-            description,
-            rule_type,
-            keywords_json: serde_json::to_string(&keywords).unwrap_or_default(),
-            positive,
-            source_chunk_id: None,
-            confidence: 100,
-            status: "active".to_string(),
-            created_at: now.clone(),
-            updated_at: now,
-        })
-        .map_err(to_command_error)
+    core.create_rule(&novellossless_storage::WorldRule {
+        id: uuid::Uuid::new_v4().to_string(),
+        project_id,
+        name,
+        description,
+        rule_type,
+        keywords_json: serde_json::to_string(&keywords).unwrap_or_default(),
+        positive,
+        source_chunk_id: None,
+        confidence: 100,
+        status: "active".to_string(),
+        created_at: now.clone(),
+        updated_at: now,
+    })
+    .map_err(to_command_error)
 }
 
 #[tauri::command]
 fn delete_rule(app: tauri::AppHandle, rule_id: String) -> Result<(), String> {
     let core = open_core(&app)?;
-    core.storage.delete_rule(&rule_id).map_err(to_command_error)
+    core.delete_rule(&rule_id).map_err(to_command_error)
 }
 
 #[tauri::command]
 fn list_tasks(app: tauri::AppHandle, project_id: String) -> Result<Vec<RevisionTaskDto>, String> {
     let core = open_core(&app)?;
-    let tasks = core
-        .storage
-        .list_tasks(&project_id)
-        .map_err(to_command_error)?;
+    let tasks = core.list_tasks(&project_id).map_err(to_command_error)?;
     Ok(tasks
         .into_iter()
         .map(|t| RevisionTaskDto {
@@ -613,8 +606,7 @@ fn update_task_status(
     status: String,
 ) -> Result<(), String> {
     let core = open_core(&app)?;
-    core.storage
-        .update_task_status(&task_id, &status)
+    core.update_task_status(&task_id, &status)
         .map_err(to_command_error)
 }
 
@@ -624,8 +616,7 @@ fn list_timeline_events(
     project_id: String,
 ) -> Result<Vec<TimelineEvent>, String> {
     let core = open_core(&app)?;
-    core.storage
-        .list_timeline_events(&project_id)
+    core.list_timeline_events(&project_id)
         .map_err(to_command_error)
 }
 
@@ -903,7 +894,17 @@ impl ProgressReporter for TauriProgressReporter {
 
 fn open_core(app: &tauri::AppHandle) -> Result<NovelCore, String> {
     let db_path = database_path(app)?;
-    NovelCore::open(&db_path).map_err(to_command_error)
+    let profiles_root = app
+        .path()
+        .resource_dir()
+        .map(|d| d.join("profiles"))
+        .ok()
+        .filter(|p| p.join("common_longform").join("profile.toml").exists());
+    if let Some(root) = profiles_root {
+        NovelCore::open_with(&db_path, Some(&root)).map_err(to_command_error)
+    } else {
+        NovelCore::open(&db_path).map_err(to_command_error)
+    }
 }
 
 fn database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {

@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 pub struct NovelCore {
-    pub storage: Storage,
+    pub(crate) storage: Storage,
     profiles_root: PathBuf,
     profile_manifests: Vec<ProfileManifest>,
     extractor_rules: ExtractorRules,
@@ -123,8 +123,15 @@ pub struct DocumentTree {
 
 impl NovelCore {
     pub fn open(db_path: &Path) -> Result<Self> {
+        Self::open_with(db_path, None)
+    }
+
+    pub fn open_with(db_path: &Path, profiles_root_opt: Option<&Path>) -> Result<Self> {
         let storage = Storage::open(db_path)?;
-        let profiles_root = find_profiles_root();
+        let profiles_root = match profiles_root_opt {
+            Some(path) => path.to_path_buf(),
+            None => find_profiles_root(),
+        };
         let manifests = ProfileLoader::load_all(&profiles_root).unwrap_or_default();
         let analysis_rules = profile::load_analysis_rules(&profiles_root);
         let default_rules = ProfileLoader::load_rules(&profiles_root, "common_longform")
@@ -174,6 +181,24 @@ impl NovelCore {
         Self {
             storage,
             profiles_root,
+            profile_manifests: manifests,
+            extractor_rules: analysis_rules.extractors,
+            people_config: analysis_rules.people,
+            default_rules,
+            ai_provider: Box::new(novellossless_ai::NoopProvider),
+        }
+    }
+
+    pub fn from_storage_with(storage: Storage, profiles_root: &Path) -> Self {
+        let manifests = ProfileLoader::load_all(profiles_root).unwrap_or_default();
+        let analysis_rules = profile::load_analysis_rules(profiles_root);
+        let default_rules = ProfileLoader::load_rules(profiles_root, "common_longform")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        Self {
+            storage,
+            profiles_root: profiles_root.to_path_buf(),
             profile_manifests: manifests,
             extractor_rules: analysis_rules.extractors,
             people_config: analysis_rules.people,
@@ -328,81 +353,15 @@ impl NovelCore {
                         match self.scan_file(&project, &root, file, enable_chunking) {
                             Ok(()) => {
                                 modified += 1;
-                                let parsed = novellossless_parser::parse_document(file)?;
-                                let chapters = if enable_chunking {
-                                    parsed.chapters
-                                } else {
-                                    vec![novellossless_parser::Chapter {
-                                        index: 0,
-                                        title: parsed.title.clone(),
-                                        start_offset: 0,
-                                        end_offset: parsed.content.len(),
-                                        content: parsed.content.clone(),
-                                    }]
-                                };
-                                let new_chunks: Vec<NewChunk> = chapters
-                                    .iter()
-                                    .map(|ch| NewChunk {
-                                        chunk_index: ch.index as i64,
-                                        title: ch.title.clone(),
-                                        start_offset: ch.start_offset as i64,
-                                        end_offset: ch.end_offset as i64,
-                                        content: ch.content.clone(),
-                                        content_hash: sha256_hex(ch.content.as_bytes()),
-                                        word_count: count_words(&ch.content) as i64,
-                                    })
-                                    .collect();
-                                let diff = scan::diff_chunks(&old_chunks, &new_chunks);
-                                let diff_arr: Vec<serde_json::Value> = {
-                                    let mut v = Vec::new();
-                                    for a in &diff.added {
-                                        v.push(serde_json::json!({"kind":"added","index":a.index,"title":a.title,"hash":a.hash}));
-                                    }
-                                    for r in &diff.removed {
-                                        v.push(serde_json::json!({"kind":"removed","index":r.index,"title":r.title,"hash":r.hash}));
-                                    }
-                                    for m in &diff.modified {
-                                        v.push(serde_json::json!({"kind":"modified","index":m.index,"old_title":m.old_title,"new_title":m.new_title,"old_hash":m.old_hash,"new_hash":m.new_hash}));
-                                    }
-                                    v
-                                };
-                                let diff_json = serde_json::to_string(&diff_arr).ok();
-                                let _ = self.storage.record_file_scan(
+                                self.record_file_diff(
                                     project_id,
                                     &doc_id,
-                                    Some(&current_doc.content_hash),
+                                    file,
+                                    enable_chunking,
+                                    &old_chunks,
+                                    &current_doc.content_hash,
                                     &hash,
-                                    "modified",
-                                    None,
-                                );
-                                let _ = self.storage.record_revision(
-                                    project_id,
-                                    &doc_id,
-                                    "incremental",
-                                    Some(&current_doc.content_hash),
-                                    &hash,
-                                    old_chunks.len() as i64,
-                                    new_chunks.len() as i64,
-                                    diff.added.len() as i64,
-                                    diff.removed.len() as i64,
-                                    diff.modified.len() as i64,
-                                    diff_json.as_deref(),
-                                );
-
-                                // Impact analysis
-                                if !diff.added.is_empty()
-                                    || !diff.removed.is_empty()
-                                    || !diff.modified.is_empty()
-                                {
-                                    if let Ok(new_pc) = self.storage.document_chunks(&doc_id) {
-                                        let _ = novellossless_impact::ImpactAnalyzer::analyze(
-                                            project_id,
-                                            &old_chunks,
-                                            &new_pc,
-                                            &self.storage,
-                                        );
-                                    }
-                                }
+                                )?;
                             }
                             Err(e) => {
                                 progress.error(&relative, &e.to_string());
@@ -494,81 +453,15 @@ impl NovelCore {
                     match self.scan_file(&project, &root, file_path, enable_chunking) {
                         Ok(()) => {
                             result.modified = 1;
-                            let parsed = novellossless_parser::parse_document(file_path)?;
-                            let chapters = if enable_chunking {
-                                parsed.chapters
-                            } else {
-                                vec![novellossless_parser::Chapter {
-                                    index: 0,
-                                    title: parsed.title.clone(),
-                                    start_offset: 0,
-                                    end_offset: parsed.content.len(),
-                                    content: parsed.content.clone(),
-                                }]
-                            };
-                            let new_chunks: Vec<NewChunk> = chapters
-                                .iter()
-                                .map(|ch| NewChunk {
-                                    chunk_index: ch.index as i64,
-                                    title: ch.title.clone(),
-                                    start_offset: ch.start_offset as i64,
-                                    end_offset: ch.end_offset as i64,
-                                    content: ch.content.clone(),
-                                    content_hash: sha256_hex(ch.content.as_bytes()),
-                                    word_count: count_words(&ch.content) as i64,
-                                })
-                                .collect();
-                            let diff = scan::diff_chunks(&old_chunks, &new_chunks);
-                            let diff_arr: Vec<serde_json::Value> = {
-                                let mut v = Vec::new();
-                                for a in &diff.added {
-                                    v.push(serde_json::json!({"kind":"added","index":a.index,"title":a.title}));
-                                }
-                                for r in &diff.removed {
-                                    v.push(serde_json::json!({"kind":"removed","index":r.index,"title":r.title}));
-                                }
-                                for m in &diff.modified {
-                                    v.push(serde_json::json!({"kind":"modified","index":m.index,"old_title":m.old_title,"new_title":m.new_title}));
-                                }
-                                v
-                            };
-                            let diff_json = serde_json::to_string(&diff_arr).ok();
-                            let _ = self.storage.record_file_scan(
+                            self.record_file_diff(
                                 project_id,
                                 &doc_id,
-                                Some(&current_doc.content_hash),
+                                file_path,
+                                enable_chunking,
+                                &old_chunks,
+                                &current_doc.content_hash,
                                 &hash,
-                                "modified",
-                                None,
-                            );
-                            let _ = self.storage.record_revision(
-                                project_id,
-                                &doc_id,
-                                "incremental",
-                                Some(&current_doc.content_hash),
-                                &hash,
-                                old_chunks.len() as i64,
-                                new_chunks.len() as i64,
-                                diff.added.len() as i64,
-                                diff.removed.len() as i64,
-                                diff.modified.len() as i64,
-                                diff_json.as_deref(),
-                            );
-
-                            // Impact analysis
-                            if !diff.added.is_empty()
-                                || !diff.removed.is_empty()
-                                || !diff.modified.is_empty()
-                            {
-                                if let Ok(new_pc) = self.storage.document_chunks(&doc_id) {
-                                    let _ = novellossless_impact::ImpactAnalyzer::analyze(
-                                        project_id,
-                                        &old_chunks,
-                                        &new_pc,
-                                        &self.storage,
-                                    );
-                                }
-                            }
+                            )?;
                         }
                         Err(_) => result.failed = 1,
                     }
@@ -620,8 +513,31 @@ impl NovelCore {
         self.storage.list_continuity_issues(project_id, limit)
     }
 
+    pub fn list_rules(&self, project_id: &str) -> Result<Vec<novellossless_storage::WorldRule>> {
+        self.storage.list_rules(project_id)
+    }
+
+    pub fn create_rule(&self, rule: &novellossless_storage::WorldRule) -> Result<()> {
+        self.storage.upsert_rule(rule)
+    }
+
+    pub fn delete_rule(&self, rule_id: &str) -> Result<()> {
+        self.storage.delete_rule(rule_id)
+    }
+
     pub fn list_tasks(&self, project_id: &str) -> Result<Vec<RevisionTask>> {
         self.storage.list_tasks(project_id)
+    }
+
+    pub fn update_task_status(&self, task_id: &str, status: &str) -> Result<()> {
+        self.storage.update_task_status(task_id, status)
+    }
+
+    pub fn list_timeline_events(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<novellossless_storage::TimelineEvent>> {
+        self.storage.list_timeline_events(project_id)
     }
 
     pub fn document_tree(
@@ -1071,6 +987,91 @@ impl NovelCore {
             issue_count: issues.len(),
         })
     }
+
+    fn record_file_diff(
+        &self,
+        project_id: &str,
+        doc_id: &str,
+        file_path: &Path,
+        enable_chunking: bool,
+        old_chunks: &[ProjectChunk],
+        old_hash: &str,
+        new_hash: &str,
+    ) -> Result<()> {
+        let parsed = novellossless_parser::parse_document(file_path)?;
+        let chapters = if enable_chunking {
+            parsed.chapters
+        } else {
+            vec![novellossless_parser::Chapter {
+                index: 0,
+                title: parsed.title.clone(),
+                start_offset: 0,
+                end_offset: parsed.content.len(),
+                content: parsed.content.clone(),
+            }]
+        };
+        let new_chunks: Vec<NewChunk> = chapters
+            .iter()
+            .map(|ch| NewChunk {
+                chunk_index: ch.index as i64,
+                title: ch.title.clone(),
+                start_offset: ch.start_offset as i64,
+                end_offset: ch.end_offset as i64,
+                content: ch.content.clone(),
+                content_hash: sha256_hex(ch.content.as_bytes()),
+                word_count: count_words(&ch.content) as i64,
+            })
+            .collect();
+        let diff = scan::diff_chunks(old_chunks, &new_chunks);
+        let diff_arr: Vec<serde_json::Value> = {
+            let mut v = Vec::new();
+            for a in &diff.added {
+                v.push(serde_json::json!({"kind":"added","index":a.index,"title":a.title,"hash":a.hash}));
+            }
+            for r in &diff.removed {
+                v.push(serde_json::json!({"kind":"removed","index":r.index,"title":r.title,"hash":r.hash}));
+            }
+            for m in &diff.modified {
+                v.push(serde_json::json!({"kind":"modified","index":m.index,"old_title":m.old_title,"new_title":m.new_title,"old_hash":m.old_hash,"new_hash":m.new_hash}));
+            }
+            v
+        };
+        let diff_json = serde_json::to_string(&diff_arr).ok();
+        let _ = self.storage.record_file_scan(
+            project_id,
+            doc_id,
+            Some(old_hash),
+            new_hash,
+            "modified",
+            None,
+        );
+        let _ = self.storage.record_revision(
+            project_id,
+            doc_id,
+            "incremental",
+            Some(old_hash),
+            new_hash,
+            old_chunks.len() as i64,
+            new_chunks.len() as i64,
+            diff.added.len() as i64,
+            diff.removed.len() as i64,
+            diff.modified.len() as i64,
+            diff_json.as_deref(),
+        );
+
+        if !diff.added.is_empty() || !diff.removed.is_empty() || !diff.modified.is_empty() {
+            if let Ok(new_pc) = self.storage.document_chunks(doc_id) {
+                let _ = novellossless_impact::ImpactAnalyzer::analyze(
+                    project_id,
+                    old_chunks,
+                    &new_pc,
+                    &self.storage,
+                );
+            }
+        }
+
+        Ok(())
+    }
 }
 
 fn ensure_supported_root(path: &Path) -> Result<()> {
@@ -1504,6 +1505,66 @@ mod tests {
         let metrics = core.get_profile_metrics(&project.id, "shuangwen")?;
         let shuangwen_density = metrics.iter().find(|m| m.metric_type == "爽点密度");
         assert!(shuangwen_density.is_some(), "should have 爽点密度 metric");
+        Ok(())
+    }
+
+    #[test]
+    fn scan_project_handles_empty_directory() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("empty", &novel_dir)?;
+        let report = core.scan_project(&project.id)?;
+        assert_eq!(report.scanned_documents, 0);
+        assert_eq!(report.skipped_files, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn incremental_scan_handles_missing_file() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+        std::fs::write(novel_dir.join("001.txt"), "第一章 雨夜\n内容。")?;
+
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("test", &novel_dir)?;
+        let result = core.incremental_scan_file(&project.id, &novel_dir.join("nonexistent.txt"));
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn find_profiles_root_returns_some_path() {
+        let root = find_profiles_root();
+        assert!(
+            root.join("common_longform").join("profile.toml").exists(),
+            "profiles root should contain common_longform/profile.toml, got: {:?}",
+            root
+        );
+    }
+
+    #[test]
+    fn get_project_returns_none_for_missing_id() -> Result<()> {
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.get_project("nonexistent")?;
+        assert!(project.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn list_rules_returns_empty_for_no_rules() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+        std::fs::write(novel_dir.join("001.txt"), "第一章 测试\n内容。")?;
+
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("rules_test", &novel_dir)?;
+        let rules = core.list_rules(&project.id)?;
+        assert!(rules.is_empty());
         Ok(())
     }
 }

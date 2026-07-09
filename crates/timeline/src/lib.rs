@@ -279,4 +279,43 @@ mod tests {
         assert!(events[0].is_flashback);
         Ok(())
     }
+
+    #[test]
+    fn extract_empty_chunks() -> Result<()> {
+        let storage = Storage::open_memory()?;
+        let project = storage.create_project("empty_tl", "/tmp/empty_tl")?;
+        TimelineEngine::extract(&project.id, &[], &storage)?;
+        let events = storage.list_timeline_events(&project.id)?;
+        assert!(events.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn extract_no_time_expression() -> Result<()> {
+        let storage = Storage::open_memory()?;
+        let project = storage.create_project("no_time", "/tmp/no_time")?;
+        let input = vec![ProjectChunk {
+            document_id: String::new(),
+            chunk_id: String::new(),
+            document_path: "001.txt".into(),
+            chunk_index: 0,
+            title: "第一章".into(),
+            content: "林澈走进了长安城。".into(),
+            start_offset: 0,
+            end_offset: 11,
+            word_count: 5,
+            content_hash: "h1".into(),
+        }];
+        let chunks = seed_chunks(&storage, &project.id, &input)?;
+        TimelineEngine::extract(&project.id, &chunks, &storage)?;
+        let events = storage.list_timeline_events(&project.id)?;
+        assert_eq!(
+            events.len(),
+            1,
+            "should create event even without time expression"
+        );
+        assert!(events[0].time_expression.is_empty());
+        assert!(events[0].estimated_order.is_none());
+        Ok(())
+    }
 }

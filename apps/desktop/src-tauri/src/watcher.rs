@@ -88,7 +88,6 @@ impl FileWatcher {
             drop(w);
         }
     }
-
 }
 
 fn is_supported(path: &Path) -> bool {
