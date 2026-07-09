@@ -54,7 +54,7 @@ impl TimelineEngine {
         let relative_re =
             Regex::new(r"(\d+|[一二三四五六七八九十百千万]+)(?:天|个?月|年)(?:[后之]?[后前])")?;
         let absolute_re = Regex::new(
-            r"(天宝|贞观|开元|神龙|武德|乾元|大历|建中|贞元|元和|长庆|宝历|太和|开成|会昌|大中|咸通|乾符|广明|中和|光启|文德|龙纪|大顺|景福|乾宁|光化|天复|天祐|景德|祥符|天禧|乾兴|天圣|明道|景祐|宝元|康定|庆历|皇祐|至和|嘉祐|治平|熙宁|元丰|元祐|绍圣|元符|靖国|崇宁|大观|政和|重和|宣和|靖康|建炎|绍兴|隆兴|乾道|淳熙|绍熙|庆元|嘉泰|开禧|嘉定|宝庆|绍定|端平|嘉熙|淳祐|宝祐|开庆|景定|咸淳|德祐|景炎|祥兴)(\d*)(?:载|年)?",
+            r"(天宝|贞观|开元|神龙|武德|乾元|大历|建中|贞元|元和|长庆|宝历|太和|开成|会昌|大中|咸通|乾符|广明|中和|光启|文德|龙纪|大顺|景福|乾宁|光化|天复|天祐|景德|祥符|天禧|乾兴|天圣|明道|景祐|宝元|康定|庆历|皇祐|至和|嘉祐|治平|熙宁|元丰|元祐|绍圣|元符|靖国|崇宁|大观|政和|重和|宣和|靖康|建炎|绍兴|隆兴|乾道|淳熙|绍熙|庆元|嘉泰|开禧|嘉定|宝庆|绍定|端平|嘉熙|淳祐|宝祐|开庆|景定|咸淳|德祐|景炎|祥兴)(\d+|[一二三四五六七八九十百千万]+)(?:载|年)?",
         )?;
         let flashback_re = Regex::new(r"(回忆起|想起|回想|那年|曾经|当时|那时|多年前|很久以前)")?;
 
@@ -83,6 +83,8 @@ impl TimelineEngine {
                     time_expr = cap.get(0).map(|m| m.as_str()).unwrap_or("").to_string();
                     if let Some(num_str) = cap.get(2).map(|m| m.as_str()) {
                         if let Ok(n) = num_str.parse::<i64>() {
+                            estimated_order = Some(n);
+                        } else if let Some(n) = parse_chinese_number(num_str) {
                             estimated_order = Some(n);
                         }
                     }
@@ -248,6 +250,10 @@ mod tests {
         let events = storage.list_timeline_events(&project.id)?;
         assert_eq!(events.len(), 1);
         assert!(events[0].time_expression.contains("贞观"));
+        assert!(
+            events[0].estimated_order.is_some(),
+            "estimated_order should be set for absolute year '贞观三年'"
+        );
         Ok(())
     }
 
