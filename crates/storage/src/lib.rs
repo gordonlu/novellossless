@@ -171,6 +171,7 @@ pub struct NewContinuityIssue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContinuityIssue {
     pub id: String,
+    pub project_id: String,
     pub issue_type: String,
     pub severity: String,
     pub title: String,
@@ -1099,7 +1100,7 @@ impl Storage {
     ) -> Result<Vec<ContinuityIssue>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, issue_type, severity, title, description, evidence_json,
+            SELECT id, project_id, issue_type, severity, title, description, evidence_json,
                    suggested_actions_json, status
             FROM continuity_issues
             WHERE project_id = ?1
@@ -1119,13 +1120,14 @@ impl Storage {
         let rows = stmt.query_map(params![project_id, limit], |row| {
             Ok(ContinuityIssue {
                 id: row.get(0)?,
-                issue_type: row.get(1)?,
-                severity: row.get(2)?,
-                title: row.get(3)?,
-                description: row.get(4)?,
-                evidence_json: row.get(5)?,
-                suggested_actions_json: row.get(6)?,
-                status: row.get(7)?,
+                project_id: row.get(1)?,
+                issue_type: row.get(2)?,
+                severity: row.get(3)?,
+                title: row.get(4)?,
+                description: row.get(5)?,
+                evidence_json: row.get(6)?,
+                suggested_actions_json: row.get(7)?,
+                status: row.get(8)?,
             })
         })?;
 

@@ -6,6 +6,7 @@ members = [
     "crates/parser",
     "crates/profiles",
     "crates/storage",
+    "crates/tasks",
 ]
 resolver = "2"
 
