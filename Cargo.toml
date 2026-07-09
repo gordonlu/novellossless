@@ -10,6 +10,7 @@ members = [
     "crates/storage",
     "crates/tasks",
     "crates/timeline",
+    "crates/ai",
 ]
 resolver = "2"
 
