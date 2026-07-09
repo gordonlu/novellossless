@@ -1,12 +1,9 @@
 use std::fs;
-use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use encoding_rs::{GB18030, UTF_8};
-use quick_xml::Reader as XmlReader;
-use quick_xml::events::Event;
 use regex::Regex;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,53 +66,20 @@ pub fn decode_text(bytes: &[u8]) -> Result<TextDocument> {
 }
 
 pub fn read_docx_file(path: &Path) -> Result<TextDocument> {
-    let file =
-        fs::File::open(path).with_context(|| format!("failed to open docx {}", path.display()))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .with_context(|| format!("failed to read docx as zip {}", path.display()))?;
-    let mut xml_buf = String::new();
-    archive
-        .by_name("word/document.xml")
-        .with_context(|| format!("docx missing word/document.xml in {}", path.display()))?
-        .read_to_string(&mut xml_buf)
-        .context("failed to read word/document.xml")?;
+    let docx_file = docx_rust::DocxFile::from_file(path)
+        .with_context(|| format!("failed to open docx {}", path.display()))?;
+    let docx = docx_file
+        .parse()
+        .with_context(|| format!("failed to parse docx structure in {}", path.display()))?;
 
-    let mut reader = XmlReader::from_str(&xml_buf);
-    let mut in_paragraph = false;
-    let mut in_text = false;
-    let mut paragraph = String::new();
     let mut paragraphs: Vec<String> = Vec::new();
-    let mut buf = Vec::new();
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => match e.name().as_ref() {
-                b"w:p" | b"w:pPr" => in_paragraph = true,
-                b"w:t" => in_text = true,
-                b"w:br" if in_paragraph => paragraph.push('\n'),
-                _ => {}
-            },
-            Ok(Event::End(ref e)) => match e.name().as_ref() {
-                b"w:p" => {
-                    if !paragraph.trim().is_empty() {
-                        paragraphs.push(paragraph.trim().to_string());
-                    }
-                    paragraph.clear();
-                    in_paragraph = false;
-                }
-                b"w:t" => in_text = false,
-                _ => {}
-            },
-            Ok(Event::Text(ref e)) if in_text => {
-                if let Ok(text) = e.unescape() {
-                    paragraph.push_str(&text);
-                }
+    for content in &docx.document.body.content {
+        if let docx_rust::document::BodyContent::Paragraph(para) = content {
+            let text = para.text().trim().to_string();
+            if !text.is_empty() {
+                paragraphs.push(text);
             }
-            Ok(Event::Eof) => break,
-            Err(e) => anyhow::bail!("docx xml parse error: {e}"),
-            _ => {}
         }
-        buf.clear();
     }
 
     let content = paragraphs.join("\n\n");
@@ -231,33 +195,15 @@ fn is_chapter_title(line: &str) -> bool {
 }
 
 fn make_docx(paragraphs: &[&str]) -> Vec<u8> {
-    use std::fmt::Write;
-    use zip::write::SimpleFileOptions;
-    let opts = SimpleFileOptions::default();
-    let mut buf = std::io::Cursor::new(Vec::new());
-    let mut zip = zip::ZipWriter::new(&mut buf);
-    zip.add_directory("word/", opts).unwrap();
-    zip.add_directory("_rels/", opts).unwrap();
-    zip.add_directory("word/_rels/", opts).unwrap();
-    zip.start_file("[Content_Types].xml", opts).unwrap();
-    zip.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>").unwrap();
-    zip.start_file("_rels/.rels", opts).unwrap();
-    zip.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>").unwrap();
-    zip.start_file("word/_rels/document.xml.rels", opts)
-        .unwrap();
-    zip.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"></Relationships>").unwrap();
-    zip.start_file("word/document.xml", opts).unwrap();
-    let mut body = String::from(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:body>"#,
-    );
-    for para in paragraphs {
-        let _ = write!(body, "    <w:p><w:r><w:t>{}</w:t></w:r></w:p>\n", para);
+    use docx_rust::Docx;
+    use docx_rust::document::Paragraph;
+    let mut docx = Docx::default();
+    for text in paragraphs {
+        let para = Paragraph::default().push_text(*text);
+        docx.document.body.push(para);
     }
-    body.push_str("  </w:body>\n</w:document>");
-    zip.write_all(body.as_bytes()).unwrap();
-    zip.finish().unwrap();
+    let mut buf = std::io::Cursor::new(Vec::new());
+    docx.write(&mut buf).unwrap();
     buf.into_inner()
 }
 
