@@ -1137,7 +1137,7 @@ fn is_supported_text_file(path: &Path) -> bool {
         .map(|extension| {
             matches!(
                 extension.to_ascii_lowercase().as_str(),
-                "txt" | "md" | "markdown"
+                "txt" | "md" | "markdown" | "docx"
             )
         })
         .unwrap_or(false)
@@ -1151,6 +1151,7 @@ fn document_kind(path: &Path) -> String {
         .as_deref()
     {
         Some("md" | "markdown") => "markdown".to_string(),
+        Some("docx") => "document".to_string(),
         _ => "text".to_string(),
     }
 }

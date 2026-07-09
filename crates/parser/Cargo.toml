@@ -8,4 +8,9 @@ repository.workspace = true
 [dependencies]
 anyhow.workspace = true
 encoding_rs.workspace = true
+quick-xml.workspace = true
 regex.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

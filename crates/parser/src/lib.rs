@@ -1,9 +1,12 @@
 use std::fs;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use encoding_rs::{GB18030, UTF_8};
+use quick_xml::Reader as XmlReader;
+use quick_xml::events::Event;
 use regex::Regex;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,8 +68,61 @@ pub fn decode_text(bytes: &[u8]) -> Result<TextDocument> {
     })
 }
 
+pub fn read_docx_file(path: &Path) -> Result<TextDocument> {
+    let file =
+        fs::File::open(path).with_context(|| format!("failed to open docx {}", path.display()))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .with_context(|| format!("failed to read docx as zip {}", path.display()))?;
+    let mut xml_buf = String::new();
+    archive
+        .by_name("word/document.xml")
+        .with_context(|| format!("docx missing word/document.xml in {}", path.display()))?
+        .read_to_string(&mut xml_buf)
+        .context("failed to read word/document.xml")?;
+
+    let mut reader = XmlReader::from_str(&xml_buf);
+    let mut in_text_tag = false;
+    let mut content = String::new();
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) if e.name().as_ref() == b"w:t" => in_text_tag = true,
+            Ok(Event::End(ref e)) if e.name().as_ref() == b"w:t" => in_text_tag = false,
+            Ok(Event::Text(ref e)) if in_text_tag => {
+                if let Ok(text) = e.unescape() {
+                    content.push_str(&text);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => anyhow::bail!("docx xml parse error: {e}"),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    if content.is_empty() {
+        anyhow::bail!("no text content found in docx {}", path.display());
+    }
+
+    Ok(TextDocument {
+        content,
+        encoding: "utf-8".to_string(),
+    })
+}
+
 pub fn parse_document(path: &Path) -> Result<ParsedDocument> {
-    let text = read_text_file(path)?;
+    let is_docx = path
+        .extension()
+        .and_then(|v| v.to_str())
+        .is_some_and(|v| v.eq_ignore_ascii_case("docx"));
+
+    let text = if is_docx {
+        read_docx_file(path)?
+    } else {
+        read_text_file(path)?
+    };
+
     let title = path
         .file_stem()
         .and_then(|value| value.to_str())
@@ -156,9 +212,75 @@ fn is_chapter_title(line: &str) -> bool {
     pattern.is_match(line)
 }
 
+fn make_docx(content: &str) -> Vec<u8> {
+    use zip::write::SimpleFileOptions;
+    let opts = SimpleFileOptions::default();
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(&mut buf);
+    zip.add_directory("word/", opts).unwrap();
+    zip.add_directory("_rels/", opts).unwrap();
+    zip.add_directory("word/_rels/", opts).unwrap();
+    zip.start_file("[Content_Types].xml", opts).unwrap();
+    zip.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>").unwrap();
+    zip.start_file("_rels/.rels", opts).unwrap();
+    zip.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>").unwrap();
+    zip.start_file("word/_rels/document.xml.rels", opts)
+        .unwrap();
+    zip.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"></Relationships>").unwrap();
+    zip.start_file("word/document.xml", opts).unwrap();
+    zip.write_all(
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>{}</w:t></w:r></w:p>
+  </w:body>
+</w:document>"#,
+            content
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    zip.finish().unwrap();
+    buf.into_inner()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_docx_content() {
+        let docx = make_docx("第一章 雨夜\n\n林澈推开木门。");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.docx");
+        std::fs::write(&path, docx).unwrap();
+        let doc = parse_document(&path).unwrap();
+        assert!(doc.content.contains("第一章 雨夜"));
+        assert!(doc.content.contains("林澈推开木门"));
+        assert_eq!(doc.encoding, "utf-8");
+    }
+
+    #[test]
+    fn parses_docx_with_chapters() {
+        let docx = make_docx("第一章 雨夜\n林澈醒来。\n第二章 钟声\n钟声响了。");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.docx");
+        std::fs::write(&path, docx).unwrap();
+        let doc = parse_document(&path).unwrap();
+        assert_eq!(doc.chapters.len(), 2);
+        assert_eq!(doc.chapters[0].title, "第一章 雨夜");
+        assert_eq!(doc.chapters[1].title, "第二章 钟声");
+    }
+
+    #[test]
+    fn docx_invalid_zip_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.docx");
+        std::fs::write(&path, "not a zip file").unwrap();
+        let result = parse_document(&path);
+        assert!(result.is_err());
+    }
 
     #[test]
     fn splits_chinese_chapter_titles() {
