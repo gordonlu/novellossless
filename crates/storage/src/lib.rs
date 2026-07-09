@@ -220,6 +220,68 @@ pub struct KnowledgePackEntry {
     pub version: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct WorldRule {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub description: String,
+    pub rule_type: String,
+    pub keywords_json: String,
+    pub positive: bool,
+    pub source_chunk_id: Option<String>,
+    pub confidence: i32,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TimelineEvent {
+    pub id: String,
+    pub project_id: String,
+    pub chunk_id: String,
+    pub chunk_index: i64,
+    pub document_path: String,
+    pub title: String,
+    pub order_index: i64,
+    pub time_expression: String,
+    pub estimated_order: Option<i64>,
+    pub participants_json: String,
+    pub location: String,
+    pub is_flashback: bool,
+    pub confidence: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct RevisionTask {
+    pub id: String,
+    pub project_id: String,
+    pub title: String,
+    pub task_type: String,
+    pub priority: String,
+    pub source_issue_id: Option<String>,
+    pub source_foreshadow_id: Option<String>,
+    pub related_chunks_json: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub resolved_at: Option<String>,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewRevisionTask {
+    pub project_id: String,
+    pub title: String,
+    pub task_type: String,
+    pub priority: String,
+    pub source_issue_id: Option<String>,
+    pub source_foreshadow_id: Option<String>,
+    pub related_chunks_json: String,
+    pub notes: String,
+}
+
 pub struct Storage {
     conn: Connection,
 }
@@ -413,6 +475,53 @@ impl Storage {
                 entries_json TEXT NOT NULL,
                 version TEXT NOT NULL DEFAULT '0.1.0',
                 created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS world_rules (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                rule_type TEXT NOT NULL,
+                keywords_json TEXT NOT NULL DEFAULT '[]',
+                positive INTEGER NOT NULL DEFAULT 1,
+                source_chunk_id TEXT REFERENCES document_chunks(id) ON DELETE SET NULL,
+                confidence INTEGER NOT NULL DEFAULT 50,
+                status TEXT NOT NULL DEFAULT 'candidate',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS timeline_events (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                chunk_id TEXT NOT NULL REFERENCES document_chunks(id) ON DELETE CASCADE,
+                chunk_index INTEGER NOT NULL,
+                document_path TEXT NOT NULL,
+                title TEXT NOT NULL,
+                order_index INTEGER NOT NULL,
+                time_expression TEXT NOT NULL DEFAULT '',
+                estimated_order INTEGER,
+                participants_json TEXT NOT NULL DEFAULT '[]',
+                location TEXT NOT NULL DEFAULT '',
+                is_flashback INTEGER NOT NULL DEFAULT 0,
+                confidence INTEGER NOT NULL DEFAULT 50
+            );
+
+            CREATE TABLE IF NOT EXISTS revision_tasks (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                task_type TEXT NOT NULL,
+                priority TEXT NOT NULL,
+                source_issue_id TEXT,
+                source_foreshadow_id TEXT,
+                related_chunks_json TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                resolved_at TEXT,
+                notes TEXT NOT NULL DEFAULT ''
             );
             "#,
         )?;
@@ -1365,6 +1474,169 @@ impl Storage {
             .map_err(Into::into)
     }
 
+    pub fn upsert_rule(&self, rule: &WorldRule) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO world_rules (id, project_id, name, description, rule_type, keywords_json, positive, source_chunk_id, confidence, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             ON CONFLICT(id) DO UPDATE SET
+                name=excluded.name, description=excluded.description, rule_type=excluded.rule_type,
+                keywords_json=excluded.keywords_json, positive=excluded.positive,
+                source_chunk_id=excluded.source_chunk_id, confidence=excluded.confidence,
+                status=excluded.status, updated_at=excluded.updated_at",
+            params![
+                rule.id, rule.project_id, rule.name, rule.description, rule.rule_type,
+                rule.keywords_json, rule.positive, rule.source_chunk_id, rule.confidence,
+                rule.status, rule.created_at, rule.updated_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_rules(&self, project_id: &str) -> Result<Vec<WorldRule>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, name, description, rule_type, keywords_json, positive, source_chunk_id, confidence, status, created_at, updated_at
+             FROM world_rules WHERE project_id = ?1 ORDER BY updated_at DESC"
+        )?;
+        let rows = stmt.query_map(params![project_id], |row| {
+            Ok(WorldRule {
+                id: row.get(0)?, project_id: row.get(1)?, name: row.get(2)?,
+                description: row.get(3)?, rule_type: row.get(4)?, keywords_json: row.get(5)?,
+                positive: row.get::<_, i32>(6)? != 0,
+                source_chunk_id: row.get(7)?, confidence: row.get(8)?, status: row.get(9)?,
+                created_at: row.get(10)?, updated_at: row.get(11)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    pub fn get_rule(&self, id: &str) -> Result<Option<WorldRule>> {
+        self.conn.query_row(
+            "SELECT id, project_id, name, description, rule_type, keywords_json, positive, source_chunk_id, confidence, status, created_at, updated_at
+             FROM world_rules WHERE id = ?1",
+            params![id],
+            |row| Ok(WorldRule {
+                id: row.get(0)?, project_id: row.get(1)?, name: row.get(2)?,
+                description: row.get(3)?, rule_type: row.get(4)?, keywords_json: row.get(5)?,
+                positive: row.get::<_, i32>(6)? != 0,
+                source_chunk_id: row.get(7)?, confidence: row.get(8)?, status: row.get(9)?,
+                created_at: row.get(10)?, updated_at: row.get(11)?,
+            }),
+        ).optional().map_err(Into::into)
+    }
+
+    pub fn delete_rule(&self, id: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM world_rules WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn delete_project_rules(&self, project_id: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM world_rules WHERE project_id = ?1", params![project_id])?;
+        Ok(())
+    }
+
+    pub fn delete_project_timeline_events(&self, project_id: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM timeline_events WHERE project_id = ?1", params![project_id])?;
+        Ok(())
+    }
+
+    pub fn delete_project_tasks(&self, project_id: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM revision_tasks WHERE project_id = ?1", params![project_id])?;
+        Ok(())
+    }
+
+    pub fn upsert_timeline_event(&self, event: &TimelineEvent) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO timeline_events (id, project_id, chunk_id, chunk_index, document_path, title, order_index, time_expression, estimated_order, participants_json, location, is_flashback, confidence)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                event.id, event.project_id, event.chunk_id, event.chunk_index,
+                event.document_path, event.title, event.order_index, event.time_expression,
+                event.estimated_order, event.participants_json, event.location,
+                event.is_flashback, event.confidence
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_timeline_events(&self, project_id: &str) -> Result<Vec<TimelineEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, chunk_id, chunk_index, document_path, title, order_index, time_expression, estimated_order, participants_json, location, is_flashback, confidence
+             FROM timeline_events WHERE project_id = ?1 ORDER BY order_index ASC"
+        )?;
+        let rows = stmt.query_map(params![project_id], |row| {
+            Ok(TimelineEvent {
+                id: row.get(0)?, project_id: row.get(1)?, chunk_id: row.get(2)?,
+                chunk_index: row.get(3)?, document_path: row.get(4)?, title: row.get(5)?,
+                order_index: row.get(6)?, time_expression: row.get(7)?,
+                estimated_order: row.get(8)?, participants_json: row.get(9)?,
+                location: row.get(10)?,
+                is_flashback: row.get::<_, i32>(11)? != 0,
+                confidence: row.get(12)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    pub fn create_task(&self, task: &NewRevisionTask) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO revision_tasks (id, project_id, title, task_type, priority, source_issue_id, source_foreshadow_id, related_chunks_json, status, created_at, updated_at, notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, ?9, ?10)",
+            params![
+                id, task.project_id, task.title, task.task_type, task.priority,
+                task.source_issue_id, task.source_foreshadow_id, task.related_chunks_json,
+                now, task.notes
+            ],
+        )?;
+        Ok(id)
+    }
+
+    pub fn update_task_status(&self, id: &str, status: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE revision_tasks SET status = ?1, updated_at = ?2 WHERE id = ?3",
+            params![status, now, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_tasks(&self, project_id: &str) -> Result<Vec<RevisionTask>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, title, task_type, priority, source_issue_id, source_foreshadow_id, related_chunks_json, status, created_at, updated_at, resolved_at, notes
+             FROM revision_tasks WHERE project_id = ?1 ORDER BY
+                CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+                created_at DESC"
+        )?;
+        let rows = stmt.query_map(params![project_id], |row| {
+            Ok(RevisionTask {
+                id: row.get(0)?, project_id: row.get(1)?, title: row.get(2)?,
+                task_type: row.get(3)?, priority: row.get(4)?,
+                source_issue_id: row.get(5)?, source_foreshadow_id: row.get(6)?,
+                related_chunks_json: row.get(7)?, status: row.get(8)?,
+                created_at: row.get(9)?, updated_at: row.get(10)?,
+                resolved_at: row.get(11)?, notes: row.get(12)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    pub fn get_task(&self, id: &str) -> Result<Option<RevisionTask>> {
+        self.conn.query_row(
+            "SELECT id, project_id, title, task_type, priority, source_issue_id, source_foreshadow_id, related_chunks_json, status, created_at, updated_at, resolved_at, notes
+             FROM revision_tasks WHERE id = ?1",
+            params![id],
+            |row| Ok(RevisionTask {
+                id: row.get(0)?, project_id: row.get(1)?, title: row.get(2)?,
+                task_type: row.get(3)?, priority: row.get(4)?,
+                source_issue_id: row.get(5)?, source_foreshadow_id: row.get(6)?,
+                related_chunks_json: row.get(7)?, status: row.get(8)?,
+                created_at: row.get(9)?, updated_at: row.get(10)?,
+                resolved_at: row.get(11)?, notes: row.get(12)?,
+            }),
+        ).optional().map_err(Into::into)
+    }
+
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
         self.conn
             .query_row(
@@ -1778,6 +2050,58 @@ mod tests {
         let packs = storage.get_knowledge_packs("history")?;
         assert_eq!(packs.len(), 1);
         assert_eq!(packs[0].pack_name, "tang_officials");
+        Ok(())
+    }
+
+    #[test]
+    fn stores_and_retrieves_rules() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("rules_test")?;
+        storage.upsert_rule(&WorldRule {
+            id: "r1".into(), project_id: pid.clone(),
+            name: "魔法不能凭空制造生命".into(), description: "禁止用魔法创造生命".into(),
+            rule_type: "world".into(), keywords_json: r#"["魔法","生命","创造"]"#.into(),
+            positive: true, source_chunk_id: None, confidence: 100,
+            status: "active".into(), created_at: "now".into(), updated_at: "now".into(),
+        })?;
+        let rules = storage.list_rules(&pid)?;
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].name, "魔法不能凭空制造生命");
+        Ok(())
+    }
+
+    #[test]
+    fn stores_and_lists_timeline_events() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("tl_test")?;
+        let doc_id = seed_document(&storage, &pid, "002.txt")?;
+        let chunks = storage.document_chunks(&doc_id)?;
+        let chunk_id = chunks[0].chunk_id.clone();
+        storage.upsert_timeline_event(&TimelineEvent {
+            id: "t1".into(), project_id: pid.clone(), chunk_id: chunk_id,
+            chunk_index: 0, document_path: "002.txt".into(), title: "第一章".into(),
+            order_index: 1, time_expression: "三天后".into(), estimated_order: Some(3),
+            participants_json: r#"["林澈"]"#.into(), location: "长安".into(),
+            is_flashback: false, confidence: 50,
+        })?;
+        let events = storage.list_timeline_events(&pid)?;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].time_expression, "三天后");
+        Ok(())
+    }
+
+    #[test]
+    fn creates_and_lists_tasks() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("tasks_test")?;
+        let id = storage.create_task(&NewRevisionTask {
+            project_id: pid.clone(), title: "检查战力倒退".into(), task_type: "conflict".into(),
+            priority: "high".into(), source_issue_id: None, source_foreshadow_id: None,
+            related_chunks_json: "[]".into(), notes: String::new(),
+        })?;
+        let tasks = storage.list_tasks(&pid)?;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "检查战力倒退");
+        storage.update_task_status(&id, "resolved")?;
+        let task = storage.get_task(&id)?.expect("exists");
+        assert_eq!(task.status, "resolved");
         Ok(())
     }
 }
