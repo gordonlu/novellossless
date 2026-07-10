@@ -358,7 +358,7 @@ fn check_face_slap_diminishing(check: &CheckDefinition, chunks: &[&str]) -> Opti
         "全场",
     ];
     const SETUP_KEYWORDS: &[&str] = &["挑衅", "羞辱", "侮辱", "嘲讽"];
-    const REACTION_KEYWORDS: &[&str] = &["众人", "全场", "目瞪口呆", "跪", "震惊"];
+    const REACTION_KEYWORDS: &[&str] = &["众人", "全场", "目瞪口呆", "跪"];
 
     let mut events: Vec<(usize, bool, bool, usize)> = Vec::new();
 
@@ -580,13 +580,17 @@ mod tests {
             profile_id: "shuangwen".into(),
             severity: "medium".into(),
         };
-        let chunks2 = vec!["打脸。震惊。", "打脸。全场。"];
+        let chunks2 = vec!["当众打脸，全场跪服。", "打脸众人，全场跪服。"];
         let issues2 =
             IssueEmitter::emit(&[check.clone()], &chunks2, &KnowledgePackIndex::default());
         assert!(!issues2.is_empty());
         assert_eq!(issues2[0].severity, "medium");
 
-        let chunks3 = vec!["打脸。震惊。", "打脸。全场。", "打脸。目瞪口呆。"];
+        let chunks3 = vec![
+            "当众打脸，全场跪服。",
+            "打脸众人，全场跪服。",
+            "再次打脸，全场目瞪口呆。",
+        ];
         let issues3 = IssueEmitter::emit(&[check], &chunks3, &KnowledgePackIndex::default());
         assert!(!issues3.is_empty());
         assert_eq!(issues3[0].severity, "high");
