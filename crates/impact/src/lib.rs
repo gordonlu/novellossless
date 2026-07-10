@@ -121,6 +121,7 @@ mod tests {
                 content_hash: "h".into(),
                 word_count: 5,
                 encoding: "utf-8".into(),
+                last_modified_at: None,
             },
             &[novellossless_storage::NewChunk {
                 chunk_index: 0,
@@ -167,6 +168,7 @@ mod tests {
                 content_hash: "h".into(),
                 word_count: 5,
                 encoding: "utf-8".into(),
+                last_modified_at: None,
             },
             &[novellossless_storage::NewChunk {
                 chunk_index: 0,
@@ -216,6 +218,7 @@ mod tests {
                 content_hash: "h".into(),
                 word_count: 5,
                 encoding: "utf-8".into(),
+                last_modified_at: None,
             },
             &[novellossless_storage::NewChunk {
                 chunk_index: 0,

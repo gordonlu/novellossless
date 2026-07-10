@@ -187,6 +187,7 @@ mod tests {
             content_hash: "test_hash".into(),
             word_count: chunks.iter().map(|c| c.word_count).sum(),
             encoding: "utf-8".into(),
+            last_modified_at: None,
         };
         let new_chunks: Vec<NewChunk> = chunks
             .iter()

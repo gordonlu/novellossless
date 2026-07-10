@@ -59,6 +59,7 @@ pub struct ScanReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanResult {
+    pub project_id: String,
     pub scanned_documents: usize,
     pub skipped_files: usize,
     pub created: usize,
@@ -448,60 +449,67 @@ impl NovelCore {
             let relative = relative_document_path(&root, file);
             progress.report(i + 1, total, &relative);
             file_paths.insert(relative.clone());
-            let hash = file_content_hash(file)?;
+            let mtime = file_modified_time(file).ok();
 
             let scanned = match self.storage.existing_document_id(project_id, &relative)? {
-                None => match self.scan_file(&project, &root, file, enable_chunking) {
-                    Ok(()) => {
-                        created += 1;
-                        if let Ok(Some(doc_id)) =
-                            self.storage.existing_document_id(project_id, &relative)
-                        {
-                            let _ = self.storage.record_file_scan(
-                                project_id, &doc_id, None, &hash, "created", None,
-                            );
+                None => {
+                    let hash = file_content_hash(file)?;
+                    match self.scan_file(&project, &root, file, enable_chunking) {
+                        Ok(()) => {
+                            created += 1;
+                            if let Ok(Some(doc_id)) =
+                                self.storage.existing_document_id(project_id, &relative)
+                            {
+                                let _ = self.storage.record_file_scan(
+                                    project_id, &doc_id, None, &hash, "created", None,
+                                );
+                            }
+                            true
                         }
-                        true
+                        Err(e) => {
+                            progress.error(&relative, &e.to_string());
+                            failed += 1;
+                            false
+                        }
                     }
-                    Err(e) => {
-                        progress.error(&relative, &e.to_string());
-                        failed += 1;
-                        false
-                    }
-                },
+                }
                 Some(doc_id) => {
                     let current_doc = self.storage.project_document_by_id(&doc_id)?;
-                    if current_doc.content_hash == hash {
+
+                    // mtime shortcut: skip hash if mtime matches stored
+                    if current_doc.last_modified_at.as_deref() == mtime.as_deref() {
                         unchanged += 1;
-                        let _ = self.storage.record_file_scan(
-                            project_id,
-                            &doc_id,
-                            Some(&hash),
-                            &hash,
-                            "unchanged",
-                            None,
-                        );
                         true
                     } else {
-                        let old_chunks = self.storage.document_chunks(&doc_id)?;
-                        match self.scan_file(&project, &root, file, enable_chunking) {
-                            Ok(()) => {
-                                modified += 1;
-                                self.record_file_diff(
-                                    project_id,
-                                    &doc_id,
-                                    file,
-                                    enable_chunking,
-                                    &old_chunks,
-                                    &current_doc.content_hash,
-                                    &hash,
-                                )?;
-                                true
+                        let hash = file_content_hash(file)?;
+                        if current_doc.content_hash == hash {
+                            // content unchanged, just touched — update mtime
+                            if let Some(ref m) = mtime {
+                                let _ = self.storage.update_document_mtime(&doc_id, m);
                             }
-                            Err(e) => {
-                                progress.error(&relative, &e.to_string());
-                                failed += 1;
-                                false
+                            unchanged += 1;
+                            true
+                        } else {
+                            let old_chunks = self.storage.document_chunks(&doc_id)?;
+                            match self.scan_file(&project, &root, file, enable_chunking) {
+                                Ok(()) => {
+                                    modified += 1;
+                                    self.record_file_diff(
+                                        project_id,
+                                        &doc_id,
+                                        file,
+                                        enable_chunking,
+                                        &old_chunks,
+                                        &current_doc.content_hash,
+                                        &hash,
+                                    )?;
+                                    true
+                                }
+                                Err(e) => {
+                                    progress.error(&relative, &e.to_string());
+                                    failed += 1;
+                                    false
+                                }
                             }
                         }
                     }
@@ -529,12 +537,16 @@ impl NovelCore {
             }
         }
 
-        self.storage
-            .update_scan_run_status(&scan_run.id, "analyzing")?;
-        let _ = self.analyze_project(project_id)?;
+        let anything_changed = created + modified + deleted > 0;
+        if anything_changed {
+            self.storage
+                .update_scan_run_status(&scan_run.id, "analyzing")?;
+            let _ = self.analyze_project(project_id)?;
+        }
         self.storage.complete_scan_run(&scan_run.id)?;
 
         Ok(ScanResult {
+            project_id: project_id.to_string(),
             scanned_documents: created + modified,
             skipped_files: failed,
             created,
@@ -580,6 +592,7 @@ impl NovelCore {
             let _ = self.analyze_project(project_id)?;
             self.storage.complete_scan_run(scan_run_id)?;
             return Ok(ScanResult {
+                project_id: project_id.to_string(),
                 scanned_documents: already_scanned.len(),
                 skipped_files: 0,
                 created: 0,
@@ -610,66 +623,73 @@ impl NovelCore {
             }
 
             file_paths.insert(relative.clone());
-            let hash = file_content_hash(file)?;
+            let mtime = file_modified_time(file).ok();
 
             match self.storage.existing_document_id(project_id, &relative)? {
-                None => match self.scan_file(&project, &root, file, enable_chunking) {
-                    Ok(()) => {
-                        created += 1;
-                        if let Ok(Some(doc_id)) =
-                            self.storage.existing_document_id(project_id, &relative)
-                        {
-                            let _ = self.storage.record_file_scan(
-                                project_id, &doc_id, None, &hash, "created", None,
+                None => {
+                    let hash = file_content_hash(file)?;
+                    match self.scan_file(&project, &root, file, enable_chunking) {
+                        Ok(()) => {
+                            created += 1;
+                            if let Ok(Some(doc_id)) =
+                                self.storage.existing_document_id(project_id, &relative)
+                            {
+                                let _ = self.storage.record_file_scan(
+                                    project_id, &doc_id, None, &hash, "created", None,
+                                );
+                            }
+                            let _ = self.storage.record_scan_file(scan_run_id, &relative);
+                        }
+                        Err(e) => {
+                            progress.error(&relative, &e.to_string());
+                            failed += 1;
+                            let _ = self.storage.record_scan_error(
+                                scan_run_id,
+                                &relative,
+                                &e.to_string(),
                             );
                         }
-                        let _ = self.storage.record_scan_file(scan_run_id, &relative);
                     }
-                    Err(e) => {
-                        progress.error(&relative, &e.to_string());
-                        failed += 1;
-                        let _ =
-                            self.storage
-                                .record_scan_error(scan_run_id, &relative, &e.to_string());
-                    }
-                },
+                }
                 Some(doc_id) => {
                     let current_doc = self.storage.project_document_by_id(&doc_id)?;
-                    if current_doc.content_hash == hash {
+
+                    if current_doc.last_modified_at.as_deref() == mtime.as_deref() {
                         unchanged += 1;
-                        let _ = self.storage.record_file_scan(
-                            project_id,
-                            &doc_id,
-                            Some(&hash),
-                            &hash,
-                            "unchanged",
-                            None,
-                        );
                         let _ = self.storage.record_scan_file(scan_run_id, &relative);
                     } else {
-                        let old_chunks = self.storage.document_chunks(&doc_id)?;
-                        match self.scan_file(&project, &root, file, enable_chunking) {
-                            Ok(()) => {
-                                modified += 1;
-                                self.record_file_diff(
-                                    project_id,
-                                    &doc_id,
-                                    file,
-                                    enable_chunking,
-                                    &old_chunks,
-                                    &current_doc.content_hash,
-                                    &hash,
-                                )?;
-                                let _ = self.storage.record_scan_file(scan_run_id, &relative);
+                        let hash = file_content_hash(file)?;
+                        if current_doc.content_hash == hash {
+                            if let Some(ref m) = mtime {
+                                let _ = self.storage.update_document_mtime(&doc_id, m);
                             }
-                            Err(e) => {
-                                progress.error(&relative, &e.to_string());
-                                failed += 1;
-                                let _ = self.storage.record_scan_error(
-                                    scan_run_id,
-                                    &relative,
-                                    &e.to_string(),
-                                );
+                            unchanged += 1;
+                            let _ = self.storage.record_scan_file(scan_run_id, &relative);
+                        } else {
+                            let old_chunks = self.storage.document_chunks(&doc_id)?;
+                            match self.scan_file(&project, &root, file, enable_chunking) {
+                                Ok(()) => {
+                                    modified += 1;
+                                    self.record_file_diff(
+                                        project_id,
+                                        &doc_id,
+                                        file,
+                                        enable_chunking,
+                                        &old_chunks,
+                                        &current_doc.content_hash,
+                                        &hash,
+                                    )?;
+                                    let _ = self.storage.record_scan_file(scan_run_id, &relative);
+                                }
+                                Err(e) => {
+                                    progress.error(&relative, &e.to_string());
+                                    failed += 1;
+                                    let _ = self.storage.record_scan_error(
+                                        scan_run_id,
+                                        &relative,
+                                        &e.to_string(),
+                                    );
+                                }
                             }
                         }
                     }
@@ -693,12 +713,16 @@ impl NovelCore {
             }
         }
 
-        self.storage
-            .update_scan_run_status(scan_run_id, "analyzing")?;
-        let _ = self.analyze_project(project_id)?;
+        let anything_changed = created + modified + deleted > 0;
+        if anything_changed {
+            self.storage
+                .update_scan_run_status(scan_run_id, "analyzing")?;
+            let _ = self.analyze_project(project_id)?;
+        }
         self.storage.complete_scan_run(scan_run_id)?;
 
         Ok(ScanResult {
+            project_id: project_id.to_string(),
             scanned_documents: created + modified,
             skipped_files: failed,
             created,
@@ -720,6 +744,7 @@ impl NovelCore {
         let hash = file_content_hash(file_path)?;
 
         let mut result = ScanResult {
+            project_id: project_id.to_string(),
             scanned_documents: 0,
             skipped_files: 0,
             created: 0,
@@ -1092,6 +1117,7 @@ impl NovelCore {
         file: &Path,
         enable_chunking: bool,
     ) -> Result<()> {
+        let mtime = file_modified_time(file).ok();
         let parsed = parse_document(file)?;
         let relative_path = relative_document_path(root, file);
         let kind = document_kind(file);
@@ -1133,6 +1159,7 @@ impl NovelCore {
                 content_hash: sha256_hex(parsed.content.as_bytes()),
                 word_count: count_words(&parsed.content) as i64,
                 encoding: parsed.encoding,
+                last_modified_at: mtime,
             },
             &chunks,
         )?;
@@ -1488,6 +1515,18 @@ fn file_content_hash(path: &Path) -> Result<String> {
     let content =
         std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     Ok(sha256_hex(&content))
+}
+
+fn file_modified_time(path: &Path) -> Result<String> {
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("failed to read metadata for {}", path.display()))?;
+    let modified = metadata
+        .modified()
+        .with_context(|| format!("failed to get modification time for {}", path.display()))?;
+    let duration = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| anyhow::anyhow!("time went backwards for {}: {e}", path.display()))?;
+    Ok(duration.as_secs().to_string())
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

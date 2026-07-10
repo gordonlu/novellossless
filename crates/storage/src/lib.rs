@@ -24,6 +24,7 @@ pub struct NewDocument {
     pub content_hash: String,
     pub word_count: i64,
     pub encoding: String,
+    pub last_modified_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +80,7 @@ pub struct ProjectDocument {
     pub chapter_count: i64,
     pub word_count: i64,
     pub content_hash: String,
+    pub last_modified_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -645,9 +647,9 @@ impl Storage {
             r#"
             INSERT INTO documents (
                 id, project_id, path, kind, title, chapter_count, content_hash,
-                word_count, encoding, indexed_at, deleted
+                word_count, encoding, indexed_at, last_modified_at, deleted
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0)
             ON CONFLICT(project_id, path) DO UPDATE SET
                 kind = excluded.kind,
                 title = excluded.title,
@@ -656,6 +658,7 @@ impl Storage {
                 word_count = excluded.word_count,
                 encoding = excluded.encoding,
                 indexed_at = excluded.indexed_at,
+                last_modified_at = excluded.last_modified_at,
                 deleted = 0
             "#,
             params![
@@ -668,7 +671,8 @@ impl Storage {
                 document.content_hash,
                 document.word_count,
                 document.encoding,
-                now
+                now,
+                document.last_modified_at,
             ],
         )?;
 
@@ -888,7 +892,7 @@ impl Storage {
     pub fn project_documents(&self, project_id: &str) -> Result<Vec<ProjectDocument>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, path, title, chapter_count, word_count, content_hash
+            SELECT id, path, title, chapter_count, word_count, content_hash, last_modified_at
             FROM documents
             WHERE project_id = ?1 AND deleted = 0
             ORDER BY path ASC
@@ -903,6 +907,7 @@ impl Storage {
                 chapter_count: row.get(3)?,
                 word_count: row.get(4)?,
                 content_hash: row.get(5)?,
+                last_modified_at: row.get(6)?,
             })
         })?;
 
@@ -1485,7 +1490,7 @@ impl Storage {
     pub fn project_document_by_id(&self, id: &str) -> Result<ProjectDocument> {
         self.conn
             .query_row(
-                "SELECT id, path, title, chapter_count, word_count, content_hash FROM documents WHERE id = ?1 AND deleted = 0",
+                "SELECT id, path, title, chapter_count, word_count, content_hash, last_modified_at FROM documents WHERE id = ?1 AND deleted = 0",
                 params![id],
                 |row| {
                     Ok(ProjectDocument {
@@ -1495,6 +1500,7 @@ impl Storage {
                         chapter_count: row.get(3)?,
                         word_count: row.get(4)?,
                         content_hash: row.get(5)?,
+                        last_modified_at: row.get(6)?,
                     })
                 },
             )
@@ -1529,6 +1535,14 @@ impl Storage {
         self.conn.execute(
             "UPDATE documents SET deleted = 1 WHERE id = ?1",
             params![id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_document_mtime(&self, id: &str, mtime: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE documents SET last_modified_at = ?1 WHERE id = ?2",
+            params![mtime, id],
         )?;
         Ok(())
     }
@@ -1985,6 +1999,7 @@ mod tests {
                     content_hash: "hash".to_string(),
                     word_count: 4,
                     encoding: "utf-8".to_string(),
+                    last_modified_at: None,
                 },
                 &[NewChunk {
                     chunk_index: 0,
@@ -2045,6 +2060,7 @@ mod tests {
                 content_hash: "abc".to_string(),
                 word_count: 4,
                 encoding: "utf-8".to_string(),
+                last_modified_at: None,
             },
             &[NewChunk {
                 chunk_index: 0,
@@ -2123,6 +2139,7 @@ mod tests {
                     content_hash: "h".into(),
                     word_count: 1,
                     encoding: "utf-8".into(),
+                    last_modified_at: None,
                 },
                 &[NewChunk {
                     chunk_index: 0,
@@ -2202,6 +2219,7 @@ mod tests {
                     content_hash: "hash".to_string(),
                     word_count: 4,
                     encoding: "utf-8".to_string(),
+                    last_modified_at: None,
                 },
                 &[NewChunk {
                     chunk_index: 0,

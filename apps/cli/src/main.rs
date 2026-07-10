@@ -110,7 +110,7 @@ fn main() -> Result<()> {
         }
         Command::IncrementalScan { project_id } => {
             let report = core.incremental_scan(&project_id)?;
-            println!("增量扫描完成：");
+            println!("{} 增量扫描完成：", report.project_id);
             println!("  已扫描: {}", report.scanned_documents);
             println!("  新建: {}", report.created);
             println!("  修改: {}", report.modified);

@@ -160,6 +160,7 @@ mod tests {
             content_hash: "h1".into(),
             word_count: 6,
             encoding: "utf-8".into(),
+            last_modified_at: None,
         };
         storage.upsert_document_with_chunks(
             project_id,
