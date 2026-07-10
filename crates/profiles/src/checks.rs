@@ -333,7 +333,7 @@ fn check_identity_status_conflict(check: &CheckDefinition, chunks: &[&str]) -> O
     } else {
         Some(CheckIssue {
             issue_type: check.id.clone(),
-            severity: "medium".to_string(),
+            severity: check.severity.clone(),
             title: "身份地位冲突".to_string(),
             description: "检测到同一角色在不同章节中出现身份地位不一致。".to_string(),
             evidence_json: serde_json::to_string(&evidence_items).unwrap_or_default(),
