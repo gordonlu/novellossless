@@ -272,6 +272,26 @@ pub struct RevisionTask {
     pub notes: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ScanRun {
+    pub id: String,
+    pub project_id: String,
+    pub scan_type: String,
+    pub status: String,
+    pub total_files: i64,
+    pub scanned_files: i64,
+    pub scanned_paths: String,
+    pub errors: String,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+}
+
+pub struct NewScanRun {
+    pub project_id: String,
+    pub scan_type: String,
+    pub total_files: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewRevisionTask {
     pub project_id: String,
@@ -508,6 +528,19 @@ impl Storage {
                 location TEXT NOT NULL DEFAULT '',
                 is_flashback INTEGER NOT NULL DEFAULT 0,
                 confidence INTEGER NOT NULL DEFAULT 50
+            );
+
+            CREATE TABLE IF NOT EXISTS scan_runs (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                scan_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                total_files INTEGER NOT NULL DEFAULT 0,
+                scanned_files INTEGER NOT NULL DEFAULT 0,
+                scanned_paths TEXT NOT NULL DEFAULT '[]',
+                errors TEXT NOT NULL DEFAULT '[]',
+                started_at TEXT NOT NULL,
+                completed_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS revision_tasks (
@@ -1189,6 +1222,148 @@ impl Storage {
         )?;
 
         Ok(pack)
+    }
+
+    pub fn create_scan_run(&self, run: &NewScanRun) -> Result<ScanRun> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        let scan_run = ScanRun {
+            id: id.clone(),
+            project_id: run.project_id.clone(),
+            scan_type: run.scan_type.clone(),
+            status: "scanning".to_string(),
+            total_files: run.total_files,
+            scanned_files: 0,
+            scanned_paths: "[]".to_string(),
+            errors: "[]".to_string(),
+            started_at: now.clone(),
+            completed_at: None,
+        };
+        self.conn.execute(
+            "INSERT INTO scan_runs (id, project_id, scan_type, status, total_files, scanned_files, scanned_paths, errors, started_at, completed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                scan_run.id, scan_run.project_id, scan_run.scan_type, scan_run.status,
+                scan_run.total_files, scan_run.scanned_files, scan_run.scanned_paths,
+                scan_run.errors, scan_run.started_at, scan_run.completed_at,
+            ],
+        )?;
+        Ok(scan_run)
+    }
+
+    pub fn record_scan_file(&self, run_id: &str, path: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE scan_runs SET scanned_paths = json_set(scanned_paths, '$[#]', ?1), scanned_files = scanned_files + 1 WHERE id = ?2",
+            params![path, run_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn record_scan_error(&self, run_id: &str, path: &str, error: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE scan_runs SET errors = json_set(errors, '$[#]', json_object('path', ?1, 'error', ?2)) WHERE id = ?3",
+            params![path, error, run_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_scan_run_status(&self, id: &str, status: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE scan_runs SET status = ?1 WHERE id = ?2",
+            params![status, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn complete_scan_run(&self, id: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE scan_runs SET status = 'completed', completed_at = ?1 WHERE id = ?2",
+            params![now, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_scan_run(&self, id: &str) -> Result<Option<ScanRun>> {
+        self.conn
+            .query_row(
+                "SELECT id, project_id, scan_type, status, total_files, scanned_files, scanned_paths, errors, started_at, completed_at FROM scan_runs WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok(ScanRun {
+                        id: row.get(0)?,
+                        project_id: row.get(1)?,
+                        scan_type: row.get(2)?,
+                        status: row.get(3)?,
+                        total_files: row.get(4)?,
+                        scanned_files: row.get(5)?,
+                        scanned_paths: row.get(6)?,
+                        errors: row.get(7)?,
+                        started_at: row.get(8)?,
+                        completed_at: row.get(9)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn get_latest_incomplete_scan_run(&self, project_id: &str) -> Result<Option<ScanRun>> {
+        self.conn
+            .query_row(
+                "SELECT id, project_id, scan_type, status, total_files, scanned_files, scanned_paths, errors, started_at, completed_at
+                 FROM scan_runs
+                 WHERE project_id = ?1 AND status IN ('pending', 'scanning', 'analyzing')
+                 ORDER BY started_at DESC LIMIT 1",
+                params![project_id],
+                |row| {
+                    Ok(ScanRun {
+                        id: row.get(0)?,
+                        project_id: row.get(1)?,
+                        scan_type: row.get(2)?,
+                        status: row.get(3)?,
+                        total_files: row.get(4)?,
+                        scanned_files: row.get(5)?,
+                        scanned_paths: row.get(6)?,
+                        errors: row.get(7)?,
+                        started_at: row.get(8)?,
+                        completed_at: row.get(9)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn list_scan_runs(&self, project_id: &str) -> Result<Vec<ScanRun>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, scan_type, status, total_files, scanned_files, scanned_paths, errors, started_at, completed_at
+             FROM scan_runs WHERE project_id = ?1 ORDER BY started_at DESC",
+        )?;
+        let rows = stmt.query_map(params![project_id], |row| {
+            Ok(ScanRun {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                scan_type: row.get(2)?,
+                status: row.get(3)?,
+                total_files: row.get(4)?,
+                scanned_files: row.get(5)?,
+                scanned_paths: row.get(6)?,
+                errors: row.get(7)?,
+                started_at: row.get(8)?,
+                completed_at: row.get(9)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn fail_incomplete_scan_runs(&self, project_id: &str, reason: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE scan_runs SET status = 'failed', errors = json_set(errors, '$[#]', json_object('path', '', 'error', ?1)) WHERE project_id = ?2 AND status IN ('pending', 'scanning', 'analyzing')",
+            params![reason, project_id],
+        )?;
+        Ok(())
     }
 
     pub fn record_file_scan(

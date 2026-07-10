@@ -20,8 +20,8 @@ use novellossless_parser::parse_document;
 use novellossless_repeated::{ChunkInfo as RepeatedChunkInfo, RepeatedDescriptionEngine};
 use novellossless_storage::{
     ContextPack, ContinuityIssue, ForeshadowItem, NarrativeNode, NewChunk, NewContinuityIssue,
-    NewDocument, NewForeshadowItem, NewNarrativeNode, NewProfileMetric, Project, ProjectChunk,
-    ProjectSummary, RevisionTask, SearchHit, Storage,
+    NewDocument, NewForeshadowItem, NewNarrativeNode, NewProfileMetric, NewScanRun, Project,
+    ProjectChunk, ProjectSummary, RevisionTask, ScanRun, SearchHit, Storage,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -262,25 +262,43 @@ impl NovelCore {
         let root = PathBuf::from(&project.root_path);
         let files = collect_text_files(&root)?;
         let total = files.len();
-        let mut scanned_documents = 0;
-        let mut skipped_files = 0;
+
+        self.storage
+            .fail_incomplete_scan_runs(project_id, "abandoned by new scan")?;
+        let scan_run = self.storage.create_scan_run(&NewScanRun {
+            project_id: project_id.to_string(),
+            scan_type: "full".to_string(),
+            total_files: total as i64,
+        })?;
 
         let enable_chunking = self.default_rules.chapter_recognition;
+        let mut scanned_documents = 0;
+        let mut skipped_files = 0;
 
         for (i, file) in files.iter().enumerate() {
             let relative = relative_document_path(&root, file);
             progress.report(i + 1, total, &relative);
             match self.scan_file(&project, &root, file, enable_chunking) {
-                Ok(()) => scanned_documents += 1,
+                Ok(()) => {
+                    scanned_documents += 1;
+                    let _ = self.storage.record_scan_file(&scan_run.id, &relative);
+                }
                 Err(e) => {
                     progress.error(&relative, &e.to_string());
                     skipped_files += 1;
+                    let _ = self
+                        .storage
+                        .record_scan_error(&scan_run.id, &relative, &e.to_string());
                 }
             }
         }
 
+        self.storage
+            .update_scan_run_status(&scan_run.id, "analyzing")?;
         let analysis = self.analyze_project(project_id)?;
         let summary = self.storage.project_summary(project_id)?;
+        self.storage.complete_scan_run(&scan_run.id)?;
+
         Ok(ScanReport {
             project_id: project_id.to_string(),
             scanned_documents,
@@ -288,6 +306,110 @@ impl NovelCore {
             summary,
             analysis,
         })
+    }
+
+    pub fn resume_scan_with_progress(
+        &self,
+        project_id: &str,
+        scan_run_id: &str,
+        progress: &dyn ProgressReporter,
+    ) -> Result<ScanReport> {
+        let project = self
+            .storage
+            .get_project(project_id)?
+            .with_context(|| format!("project not found: {project_id}"))?;
+        let root = PathBuf::from(&project.root_path);
+        let files = collect_text_files(&root)?;
+
+        let scan_run = self
+            .storage
+            .get_scan_run(scan_run_id)?
+            .with_context(|| format!("scan run not found: {scan_run_id}"))?;
+
+        if scan_run.status == "completed" {
+            anyhow::bail!("scan run {scan_run_id} is already completed");
+        }
+
+        let already_scanned: std::collections::HashSet<String> =
+            serde_json::from_str::<Vec<String>>(&scan_run.scanned_paths)
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+
+        // If scanning phase was done but analysing crashed, skip straight to analysis
+        if scan_run.status == "analyzing" || already_scanned.len() as i64 >= scan_run.total_files {
+            self.storage
+                .update_scan_run_status(scan_run_id, "analyzing")?;
+            let analysis = self.analyze_project(project_id)?;
+            let summary = self.storage.project_summary(project_id)?;
+            self.storage.complete_scan_run(scan_run_id)?;
+            return Ok(ScanReport {
+                project_id: project_id.to_string(),
+                scanned_documents: already_scanned.len(),
+                skipped_files: 0,
+                summary,
+                analysis,
+            });
+        }
+
+        self.storage
+            .update_scan_run_status(scan_run_id, "scanning")?;
+
+        let enable_chunking = self.default_rules.chapter_recognition;
+        let mut scanned_documents = 0;
+        let mut skipped_files = 0;
+        let total = files.len();
+
+        for (i, file) in files.iter().enumerate() {
+            let relative = relative_document_path(&root, file);
+            progress.report(i + 1, total, &relative);
+
+            if already_scanned.contains(&relative) {
+                scanned_documents += 1;
+                continue;
+            }
+
+            match self.scan_file(&project, &root, file, enable_chunking) {
+                Ok(()) => {
+                    scanned_documents += 1;
+                    let _ = self.storage.record_scan_file(scan_run_id, &relative);
+                }
+                Err(e) => {
+                    progress.error(&relative, &e.to_string());
+                    skipped_files += 1;
+                    let _ = self
+                        .storage
+                        .record_scan_error(scan_run_id, &relative, &e.to_string());
+                }
+            }
+        }
+
+        self.storage
+            .update_scan_run_status(scan_run_id, "analyzing")?;
+        let analysis = self.analyze_project(project_id)?;
+        let summary = self.storage.project_summary(project_id)?;
+        self.storage.complete_scan_run(scan_run_id)?;
+
+        Ok(ScanReport {
+            project_id: project_id.to_string(),
+            scanned_documents,
+            skipped_files,
+            summary,
+            analysis,
+        })
+    }
+
+    pub fn get_incomplete_scan_run(&self, project_id: &str) -> Result<Option<ScanRun>> {
+        self.storage.get_latest_incomplete_scan_run(project_id)
+    }
+
+    pub fn abandon_incomplete_scan_runs(&self, project_id: &str) -> Result<()> {
+        self.storage
+            .fail_incomplete_scan_runs(project_id, "abandoned by user")
+    }
+
+    pub fn list_scan_runs(&self, project_id: &str) -> Result<Vec<ScanRun>> {
+        self.storage.list_scan_runs(project_id)
     }
 
     pub fn incremental_scan(&self, project_id: &str) -> Result<ScanResult> {
@@ -306,8 +428,16 @@ impl NovelCore {
         let root = PathBuf::from(&project.root_path);
         let files = collect_text_files(&root)?;
         let total = files.len();
-        let enable_chunking = self.default_rules.chapter_recognition;
 
+        self.storage
+            .fail_incomplete_scan_runs(project_id, "abandoned by new scan")?;
+        let scan_run = self.storage.create_scan_run(&NewScanRun {
+            project_id: project_id.to_string(),
+            scan_type: "incremental".to_string(),
+            total_files: total as i64,
+        })?;
+
+        let enable_chunking = self.default_rules.chapter_recognition;
         let mut created = 0usize;
         let mut modified = 0usize;
         let mut unchanged = 0usize;
@@ -320,7 +450,7 @@ impl NovelCore {
             file_paths.insert(relative.clone());
             let hash = file_content_hash(file)?;
 
-            match self.storage.existing_document_id(project_id, &relative)? {
+            let scanned = match self.storage.existing_document_id(project_id, &relative)? {
                 None => match self.scan_file(&project, &root, file, enable_chunking) {
                     Ok(()) => {
                         created += 1;
@@ -331,10 +461,12 @@ impl NovelCore {
                                 project_id, &doc_id, None, &hash, "created", None,
                             );
                         }
+                        true
                     }
                     Err(e) => {
                         progress.error(&relative, &e.to_string());
                         failed += 1;
+                        false
                     }
                 },
                 Some(doc_id) => {
@@ -349,6 +481,7 @@ impl NovelCore {
                             "unchanged",
                             None,
                         );
+                        true
                     } else {
                         let old_chunks = self.storage.document_chunks(&doc_id)?;
                         match self.scan_file(&project, &root, file, enable_chunking) {
@@ -363,10 +496,180 @@ impl NovelCore {
                                     &current_doc.content_hash,
                                     &hash,
                                 )?;
+                                true
                             }
                             Err(e) => {
                                 progress.error(&relative, &e.to_string());
                                 failed += 1;
+                                false
+                            }
+                        }
+                    }
+                }
+            };
+
+            if scanned {
+                let _ = self.storage.record_scan_file(&scan_run.id, &relative);
+            }
+        }
+
+        let mut deleted = 0usize;
+        for doc in self.storage.project_documents(project_id)? {
+            if !file_paths.contains(&doc.path) {
+                self.storage.mark_document_deleted(&doc.id)?;
+                let _ = self.storage.record_file_scan(
+                    project_id,
+                    &doc.id,
+                    Some(&doc.content_hash),
+                    &doc.content_hash,
+                    "deleted",
+                    None,
+                );
+                deleted += 1;
+            }
+        }
+
+        self.storage
+            .update_scan_run_status(&scan_run.id, "analyzing")?;
+        let _ = self.analyze_project(project_id)?;
+        self.storage.complete_scan_run(&scan_run.id)?;
+
+        Ok(ScanResult {
+            scanned_documents: created + modified,
+            skipped_files: failed,
+            created,
+            modified,
+            unchanged,
+            deleted,
+            failed,
+        })
+    }
+
+    pub fn resume_incremental_scan_with_progress(
+        &self,
+        project_id: &str,
+        scan_run_id: &str,
+        progress: &dyn ProgressReporter,
+    ) -> Result<ScanResult> {
+        let project = self
+            .storage
+            .get_project(project_id)?
+            .with_context(|| format!("project not found: {project_id}"))?;
+        let root = PathBuf::from(&project.root_path);
+        let files = collect_text_files(&root)?;
+
+        let scan_run = self
+            .storage
+            .get_scan_run(scan_run_id)?
+            .with_context(|| format!("scan run not found: {scan_run_id}"))?;
+
+        if scan_run.status == "completed" {
+            anyhow::bail!("scan run {scan_run_id} is already completed");
+        }
+
+        let already_scanned: std::collections::HashSet<String> =
+            serde_json::from_str::<Vec<String>>(&scan_run.scanned_paths)
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+
+        // Scanning completed but analysis crashed
+        if scan_run.status == "analyzing" || already_scanned.len() as i64 >= scan_run.total_files {
+            self.storage
+                .update_scan_run_status(scan_run_id, "analyzing")?;
+            let _ = self.analyze_project(project_id)?;
+            self.storage.complete_scan_run(scan_run_id)?;
+            return Ok(ScanResult {
+                scanned_documents: already_scanned.len(),
+                skipped_files: 0,
+                created: 0,
+                modified: 0,
+                unchanged: 0,
+                deleted: 0,
+                failed: 0,
+            });
+        }
+
+        self.storage
+            .update_scan_run_status(scan_run_id, "scanning")?;
+
+        let enable_chunking = self.default_rules.chapter_recognition;
+        let mut created = 0usize;
+        let mut modified = 0usize;
+        let mut unchanged = 0usize;
+        let mut failed = 0usize;
+        let mut file_paths: HashSet<String> = HashSet::new();
+        let total = files.len();
+
+        for (i, file) in files.iter().enumerate() {
+            let relative = relative_document_path(&root, file);
+            progress.report(i + 1, total, &relative);
+
+            if already_scanned.contains(&relative) {
+                continue;
+            }
+
+            file_paths.insert(relative.clone());
+            let hash = file_content_hash(file)?;
+
+            match self.storage.existing_document_id(project_id, &relative)? {
+                None => match self.scan_file(&project, &root, file, enable_chunking) {
+                    Ok(()) => {
+                        created += 1;
+                        if let Ok(Some(doc_id)) =
+                            self.storage.existing_document_id(project_id, &relative)
+                        {
+                            let _ = self.storage.record_file_scan(
+                                project_id, &doc_id, None, &hash, "created", None,
+                            );
+                        }
+                        let _ = self.storage.record_scan_file(scan_run_id, &relative);
+                    }
+                    Err(e) => {
+                        progress.error(&relative, &e.to_string());
+                        failed += 1;
+                        let _ =
+                            self.storage
+                                .record_scan_error(scan_run_id, &relative, &e.to_string());
+                    }
+                },
+                Some(doc_id) => {
+                    let current_doc = self.storage.project_document_by_id(&doc_id)?;
+                    if current_doc.content_hash == hash {
+                        unchanged += 1;
+                        let _ = self.storage.record_file_scan(
+                            project_id,
+                            &doc_id,
+                            Some(&hash),
+                            &hash,
+                            "unchanged",
+                            None,
+                        );
+                        let _ = self.storage.record_scan_file(scan_run_id, &relative);
+                    } else {
+                        let old_chunks = self.storage.document_chunks(&doc_id)?;
+                        match self.scan_file(&project, &root, file, enable_chunking) {
+                            Ok(()) => {
+                                modified += 1;
+                                self.record_file_diff(
+                                    project_id,
+                                    &doc_id,
+                                    file,
+                                    enable_chunking,
+                                    &old_chunks,
+                                    &current_doc.content_hash,
+                                    &hash,
+                                )?;
+                                let _ = self.storage.record_scan_file(scan_run_id, &relative);
+                            }
+                            Err(e) => {
+                                progress.error(&relative, &e.to_string());
+                                failed += 1;
+                                let _ = self.storage.record_scan_error(
+                                    scan_run_id,
+                                    &relative,
+                                    &e.to_string(),
+                                );
                             }
                         }
                     }
@@ -390,7 +693,10 @@ impl NovelCore {
             }
         }
 
+        self.storage
+            .update_scan_run_status(scan_run_id, "analyzing")?;
         let _ = self.analyze_project(project_id)?;
+        self.storage.complete_scan_run(scan_run_id)?;
 
         Ok(ScanResult {
             scanned_documents: created + modified,
@@ -1629,6 +1935,331 @@ mod tests {
             "should detect at least one repeated description issue, got {}",
             repeated_count
         );
+        Ok(())
+    }
+
+    // ── Error recovery tests ──
+
+    #[test]
+    fn full_scan_creates_scan_run_with_correct_status() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+        std::fs::write(novel_dir.join("001.txt"), "第一章 雨夜\n内容。")?;
+
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("test", &novel_dir)?;
+        core.scan_project(&project.id)?;
+
+        let incomplete = core.get_incomplete_scan_run(&project.id)?;
+        assert!(
+            incomplete.is_none(),
+            "completed scan should have no incomplete run"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn scan_run_created_on_full_scan_tracks_all_files() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+        std::fs::write(novel_dir.join("001.txt"), "第一章 雨夜\n内容。")?;
+        std::fs::write(novel_dir.join("002.txt"), "第一章 钟声\n内容。")?;
+
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("test", &novel_dir)?;
+        core.scan_project(&project.id)?;
+
+        let runs = core.list_scan_runs(&project.id)?;
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].total_files, 2);
+        assert_eq!(runs[0].scanned_files, 2);
+        assert_eq!(runs[0].status, "completed");
+
+        Ok(())
+    }
+
+    #[test]
+    fn get_incomplete_scan_run_finds_interrupted_scan() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+        std::fs::write(novel_dir.join("001.txt"), "第一章 雨夜\n内容。")?;
+
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("test", &novel_dir)?;
+
+        // Simulate a crashed scan by creating a run with "scanning" status directly
+        let run = core
+            .storage
+            .create_scan_run(&novellossless_storage::NewScanRun {
+                project_id: project.id.clone(),
+                scan_type: "full".to_string(),
+                total_files: 5,
+            })?;
+
+        let found = core.get_incomplete_scan_run(&project.id)?;
+        assert!(found.is_some(), "should find incomplete scan run");
+        assert_eq!(found.as_ref().unwrap().id, run.id);
+        assert_eq!(found.as_ref().unwrap().status, "scanning");
+
+        Ok(())
+    }
+
+    #[test]
+    fn resume_scan_skips_already_scanned_files() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+        std::fs::write(novel_dir.join("001.txt"), "第一章 雨夜\n内容。")?;
+        std::fs::write(novel_dir.join("002.txt"), "第一章 钟声\n内容。")?;
+
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("test", &novel_dir)?;
+
+        // Create a scan run and record file 001 as scanned (simulating crash after file 1)
+        let run = core
+            .storage
+            .create_scan_run(&novellossless_storage::NewScanRun {
+                project_id: project.id.clone(),
+                scan_type: "full".to_string(),
+                total_files: 2,
+            })?;
+        core.storage.record_scan_file(&run.id, "001.txt")?;
+
+        // Resume — should skip 001.txt and scan 002.txt
+        let report = core.resume_scan_with_progress(&project.id, &run.id, &NoopProgress)?;
+        assert_eq!(
+            report.scanned_documents, 2,
+            "should count both already-scanned + newly scanned"
+        );
+
+        // Verify scan run is now completed
+        let completed = core.storage.get_scan_run(&run.id)?.unwrap();
+        assert_eq!(completed.status, "completed");
+
+        Ok(())
+    }
+
+    #[test]
+    fn resume_scan_already_completed_returns_error() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+        std::fs::write(novel_dir.join("001.txt"), "第一章 雨夜\n内容。")?;
+
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("test", &novel_dir)?;
+        core.scan_project(&project.id)?;
+
+        // Get the completed run via list_scan_runs
+        let runs = core.list_scan_runs(&project.id)?;
+        let run_id = runs[0].id.clone();
+
+        let result = core.resume_scan_with_progress(&project.id, &run_id, &NoopProgress);
+        assert!(result.is_err(), "resuming completed run should fail");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("already completed"),
+            "error should mention already completed"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn resume_scan_analysis_phase_only() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+        std::fs::write(
+            novel_dir.join("001.txt"),
+            "第一章 雨夜\n林澈说他在雨夜醒来。",
+        )?;
+
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("test", &novel_dir)?;
+
+        // Create scan run and mark all files scanned, then set status to "analyzing"
+        // to simulate crash during analysis phase
+        let run = core
+            .storage
+            .create_scan_run(&novellossless_storage::NewScanRun {
+                project_id: project.id.clone(),
+                scan_type: "full".to_string(),
+                total_files: 1,
+            })?;
+        core.storage.record_scan_file(&run.id, "001.txt")?;
+        core.storage.update_scan_run_status(&run.id, "analyzing")?;
+
+        // Resume — should skip file scanning and go directly to analysis
+        let report = core.resume_scan_with_progress(&project.id, &run.id, &NoopProgress)?;
+        assert_eq!(report.scanned_documents, 1);
+
+        let completed = core.storage.get_scan_run(&run.id)?.unwrap();
+        assert_eq!(completed.status, "completed");
+
+        Ok(())
+    }
+
+    #[test]
+    fn new_scan_abandons_previous_incomplete_run() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+        std::fs::write(novel_dir.join("001.txt"), "第一章 雨夜\n内容。")?;
+
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("test", &novel_dir)?;
+
+        // Simulate crashed scan
+        let _run = core
+            .storage
+            .create_scan_run(&novellossless_storage::NewScanRun {
+                project_id: project.id.clone(),
+                scan_type: "full".to_string(),
+                total_files: 5,
+            })?;
+
+        // New scan should abandon the old one
+        core.scan_project(&project.id)?;
+
+        let incomplete = core.get_incomplete_scan_run(&project.id)?;
+        assert!(incomplete.is_none(), "no incomplete runs should remain");
+
+        let runs = core.list_scan_runs(&project.id)?;
+        let abandoned = runs.iter().find(|r| r.status == "failed");
+        assert!(abandoned.is_some(), "old run should be marked as failed");
+
+        Ok(())
+    }
+
+    #[test]
+    fn abandon_incomplete_scan_runs_marks_as_failed() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+        std::fs::write(novel_dir.join("001.txt"), "第一章 雨夜\n内容。")?;
+
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("test", &novel_dir)?;
+
+        let run = core
+            .storage
+            .create_scan_run(&novellossless_storage::NewScanRun {
+                project_id: project.id.clone(),
+                scan_type: "full".to_string(),
+                total_files: 5,
+            })?;
+
+        core.abandon_incomplete_scan_runs(&project.id)?;
+
+        let found = core.storage.get_scan_run(&run.id)?.unwrap();
+        assert_eq!(found.status, "failed");
+
+        Ok(())
+    }
+
+    #[test]
+    fn aban_incomplete_scan_run_left_behind_by_missing_runs() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("test", &novel_dir)?;
+
+        let found = core.get_incomplete_scan_run(&project.id)?;
+        assert!(found.is_none(), "no runs at all should return None");
+
+        Ok(())
+    }
+
+    #[test]
+    fn incremental_scan_creates_and_completes_scan_run() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+        std::fs::write(novel_dir.join("001.txt"), "第一章 雨夜\n内容。")?;
+
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("test", &novel_dir)?;
+        core.incremental_scan(&project.id)?;
+
+        let runs = core.list_scan_runs(&project.id)?;
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].status, "completed");
+        assert_eq!(runs[0].scan_type, "incremental");
+        assert_eq!(runs[0].scanned_files, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn resume_incremental_scan_skips_scanned_files() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+        std::fs::write(novel_dir.join("001.txt"), "第一章 雨夜\n内容。")?;
+        std::fs::write(novel_dir.join("002.txt"), "第一章 钟声\n内容。")?;
+
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("test", &novel_dir)?;
+
+        // Manually scan first file
+        let proj = core.storage.get_project(&project.id)?.unwrap();
+        let root = std::path::PathBuf::from(&proj.root_path);
+        core.scan_file(&proj, &root, &novel_dir.join("001.txt"), true)?;
+
+        // Create run with 001.txt marked as scanned
+        let run = core
+            .storage
+            .create_scan_run(&novellossless_storage::NewScanRun {
+                project_id: project.id.clone(),
+                scan_type: "incremental".to_string(),
+                total_files: 2,
+            })?;
+        core.storage.record_scan_file(&run.id, "001.txt")?;
+
+        // Resume should scan 002.txt
+        let result =
+            core.resume_incremental_scan_with_progress(&project.id, &run.id, &NoopProgress)?;
+        assert_eq!(result.created + result.modified, 1);
+
+        let completed = core.storage.get_scan_run(&run.id)?.unwrap();
+        assert_eq!(completed.status, "completed");
+
+        Ok(())
+    }
+
+    #[test]
+    fn scan_run_records_errors_on_bad_file() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir)?;
+        std::fs::write(novel_dir.join("001.txt"), "第一章 雨夜\n内容。")?;
+        // Create a binary file that will fail to parse
+        std::fs::write(novel_dir.join("002.txt"), b"\xFF\xFE\x00\x01\x02")?;
+
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("test", &novel_dir)?;
+        let report = core.scan_project(&project.id)?;
+
+        assert_eq!(report.scanned_documents, 1);
+        assert_eq!(report.skipped_files, 1);
+
+        // Verify errors were recorded in the scan run
+        let runs = core.list_scan_runs(&project.id)?;
+        assert_eq!(runs.len(), 1);
+        assert!(
+            runs[0].errors.len() > 5,
+            "errors should be non-empty JSON array"
+        );
+
         Ok(())
     }
 }
