@@ -18,6 +18,12 @@ pub enum MetricKind {
     KeywordDensity(Vec<String>),
     KeywordInterval(Vec<String>),
     ModernWordDensity(Vec<String>),
+    FaceSlapIntensity(Vec<(String, f64)>),
+    PacingFlatness {
+        window: usize,
+        event_keywords: Vec<String>,
+        conflict_keywords: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -58,10 +64,11 @@ impl MetricRegistry {
         for mdef in &self.metrics {
             let value = compute_metric(mdef, chunks);
             let unit = match mdef.kind {
-                MetricKind::KeywordDensity(_) | MetricKind::ModernWordDensity(_) => {
-                    "per_1000_chars"
-                }
+                MetricKind::KeywordDensity(_)
+                | MetricKind::ModernWordDensity(_)
+                | MetricKind::FaceSlapIntensity(_) => "per_1000_chars",
                 MetricKind::KeywordInterval(_) => "chapters",
+                MetricKind::PacingFlatness { .. } => "ratio",
             };
             results.push(MetricResult {
                 profile_id: mdef.profile_id.clone(),
@@ -133,6 +140,44 @@ pub(crate) fn metric_kind_for(metric_type: &str) -> MetricKind {
             .map(String::from)
             .collect(),
         ),
+        "打脸强度" => MetricKind::FaceSlapIntensity(vec![
+            ("打脸".into(), 1.0),
+            ("震惊".into(), 2.0),
+            ("目瞪口呆".into(), 2.0),
+            ("骇然".into(), 2.0),
+            ("震撼".into(), 2.0),
+            ("碾压".into(), 3.0),
+            ("跪".into(), 2.0),
+            ("全场".into(), 1.0),
+        ]),
+        "节奏平缓风险" => MetricKind::PacingFlatness {
+            window: 5,
+            event_keywords: vec![
+                "打脸".into(),
+                "震惊".into(),
+                "碾压".into(),
+                "逆袭".into(),
+                "翻盘".into(),
+                "爆".into(),
+                "目瞪口呆".into(),
+                "骇然".into(),
+                "震撼".into(),
+                "跪".into(),
+                "全场".into(),
+            ],
+            conflict_keywords: vec![
+                "挑衅".into(),
+                "羞辱".into(),
+                "赌约".into(),
+                "竞争".into(),
+                "对抗".into(),
+                "冲突".into(),
+                "战斗".into(),
+                "厮杀".into(),
+                "压迫".into(),
+                "侮辱".into(),
+            ],
+        },
         _ => MetricKind::KeywordDensity(Vec::new()),
     }
 }
@@ -171,6 +216,54 @@ pub(crate) fn compute_metric(mdef: &MetricDefinition, chunks: &[&str]) -> f64 {
                 return chunks.len() as f64;
             }
             intervals.iter().sum::<usize>() as f64 / intervals.len() as f64
+        }
+        MetricKind::FaceSlapIntensity(pairs) => {
+            if pairs.is_empty() || chunks.is_empty() {
+                return 0.0;
+            }
+            let total_chars: usize = chunks.iter().map(|c| c.chars().count()).sum();
+            if total_chars == 0 {
+                return 0.0;
+            }
+            let total_score: f64 = pairs
+                .iter()
+                .map(|(kw, weight)| {
+                    let count = chunks.iter().filter(|c| c.contains(kw.as_str())).count();
+                    count as f64 * weight
+                })
+                .sum();
+            (total_score / total_chars as f64) * 1000.0 * mdef.weight
+        }
+        MetricKind::PacingFlatness {
+            window,
+            event_keywords,
+            conflict_keywords,
+        } => {
+            if chunks.len() < *window {
+                return 0.0;
+            }
+            let total_chars: usize = chunks.iter().map(|c| c.chars().count()).sum();
+            let avg_chunk_len = total_chars as f64 / chunks.len() as f64;
+            let total_windows = chunks.len() - window + 1;
+            let risk_windows: usize = (0..total_windows)
+                .filter(|&i| {
+                    let window_chunks = &chunks[i..i + window];
+                    let event_count: usize = window_chunks
+                        .iter()
+                        .flat_map(|c| {
+                            event_keywords
+                                .iter()
+                                .chain(conflict_keywords.iter())
+                                .filter(|kw| c.contains(kw.as_str()))
+                        })
+                        .count();
+                    let total_chars_in_window: usize =
+                        window_chunks.iter().map(|c| c.chars().count()).sum();
+                    event_count < 2
+                        && (total_chars_in_window as f64) > avg_chunk_len * (*window as f64) * 1.5
+                })
+                .count();
+            risk_windows as f64 / total_windows as f64
         }
     }
 }
@@ -234,5 +327,141 @@ mod tests {
         ];
         let results = registry.compute_all(&chapters);
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn face_slap_intensity_metric() {
+        let mdef = MetricDefinition {
+            metric_type: "打脸强度".into(),
+            profile_id: "shuangwen".into(),
+            name: "打脸强度".into(),
+            description: String::new(),
+            weight: 1.0,
+            kind: MetricKind::FaceSlapIntensity(vec![("打脸".into(), 1.0), ("碾压".into(), 3.0)]),
+        };
+        let chunks = vec!["第一章 打脸！碾压对手。"];
+        let value = compute_metric(&mdef, &chunks);
+        assert!(value > 0.0, "should detect face-slapping: {value}");
+    }
+
+    #[test]
+    fn face_slap_intensity_empty() {
+        let mdef = MetricDefinition {
+            metric_type: "打脸强度".into(),
+            profile_id: "shuangwen".into(),
+            name: "打脸强度".into(),
+            description: String::new(),
+            weight: 1.0,
+            kind: MetricKind::FaceSlapIntensity(vec![("打脸".into(), 1.0)]),
+        };
+        let chunks: Vec<&str> = vec![];
+        let value = compute_metric(&mdef, &chunks);
+        assert_eq!(value, 0.0);
+    }
+
+    #[test]
+    fn face_slap_intensity_weighted() {
+        let mdef = MetricDefinition {
+            metric_type: "打脸强度".into(),
+            profile_id: "shuangwen".into(),
+            name: "打脸强度".into(),
+            description: String::new(),
+            weight: 1.0,
+            kind: MetricKind::FaceSlapIntensity(vec![("打脸".into(), 1.0), ("碾压".into(), 3.0)]),
+        };
+        let val_da_lian = compute_metric(&mdef, &["打脸。"]);
+        let val_nian_ya = compute_metric(&mdef, &["碾压。"]);
+        assert!(
+            val_nian_ya > val_da_lian,
+            "碾压 ({}) should contribute more than 打脸 ({})",
+            val_nian_ya,
+            val_da_lian
+        );
+    }
+
+    #[test]
+    fn pacing_flatness_risk_detects_flat() {
+        let mdef = MetricDefinition {
+            metric_type: "节奏平缓风险".into(),
+            profile_id: "shuangwen".into(),
+            name: "节奏平缓风险".into(),
+            description: String::new(),
+            weight: 1.0,
+            kind: MetricKind::PacingFlatness {
+                window: 5,
+                event_keywords: vec!["打脸".into(), "震惊".into(), "碾压".into()],
+                conflict_keywords: vec!["挑衅".into(), "战斗".into()],
+            },
+        };
+        let longs: Vec<String> = (0..5).map(|_| "a".repeat(100)).collect();
+        let shorts: Vec<String> = (0..5).map(|_| "b".repeat(1)).collect();
+        let all: Vec<String> = longs.into_iter().chain(shorts.into_iter()).collect();
+        let chunk_refs: Vec<&str> = all.iter().map(|s| s.as_str()).collect();
+        let value = compute_metric(&mdef, &chunk_refs);
+        assert!(value > 0.0, "should detect flat pacing: {value}");
+    }
+
+    #[test]
+    fn pacing_flatness_risk_no_risk_when_active() {
+        let mdef = MetricDefinition {
+            metric_type: "节奏平缓风险".into(),
+            profile_id: "shuangwen".into(),
+            name: "节奏平缓风险".into(),
+            description: String::new(),
+            weight: 1.0,
+            kind: MetricKind::PacingFlatness {
+                window: 5,
+                event_keywords: vec!["打脸".into(), "逆袭".into()],
+                conflict_keywords: vec!["挑衅".into()],
+            },
+        };
+        let chunks = vec![
+            "打脸逆袭",
+            "打脸逆袭",
+            "打脸逆袭",
+            "打脸逆袭",
+            "打脸逆袭",
+            "打脸逆袭",
+        ];
+        let value = compute_metric(&mdef, &chunks);
+        assert_eq!(value, 0.0, "active pacing should have 0 risk: {value}");
+    }
+
+    #[test]
+    fn pacing_flatness_risk_empty() {
+        let mdef = MetricDefinition {
+            metric_type: "节奏平缓风险".into(),
+            profile_id: "shuangwen".into(),
+            name: "节奏平缓风险".into(),
+            description: String::new(),
+            weight: 1.0,
+            kind: MetricKind::PacingFlatness {
+                window: 5,
+                event_keywords: vec!["打脸".into()],
+                conflict_keywords: vec![],
+            },
+        };
+        let chunks: Vec<&str> = vec![];
+        let value = compute_metric(&mdef, &chunks);
+        assert_eq!(value, 0.0);
+    }
+
+    #[test]
+    fn pacing_flatness_sliding_window_boundary() {
+        let mdef = MetricDefinition {
+            metric_type: "节奏平缓风险".into(),
+            profile_id: "shuangwen".into(),
+            name: "节奏平缓风险".into(),
+            description: String::new(),
+            weight: 1.0,
+            kind: MetricKind::PacingFlatness {
+                window: 5,
+                event_keywords: vec!["打脸".into()],
+                conflict_keywords: vec![],
+            },
+        };
+        let chunks = vec!["a"; 5];
+        let value = compute_metric(&mdef, &chunks);
+        assert_eq!(value, 0.0, "boundary case should be 0: {value}");
     }
 }

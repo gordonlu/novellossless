@@ -15,3 +15,15 @@ id = "升级间隔"
 name = "升级间隔"
 description = "相邻升级事件之间的章节间隔"
 weight = 1.0
+
+[[metrics]]
+id = "打脸强度"
+name = "打脸强度"
+description = "每千字中爽点词汇按严重程度加权的频率"
+weight = 1.0
+
+[[metrics]]
+id = "节奏平缓风险"
+name = "节奏平缓风险"
+description = "连续多个章节缺乏冲突和爽点事件的风险评分（0-1）"
+weight = 1.0
