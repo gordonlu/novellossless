@@ -2301,4 +2301,43 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn incremental_scan_detects_deleted_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir).expect("novel dir");
+        std::fs::write(novel_dir.join("001.txt"), "第一章 开头。").expect("write");
+        std::fs::write(novel_dir.join("002.txt"), "第二章 继续。").expect("write");
+
+        let core = NovelCore::from_storage(Storage::open_memory().expect("storage"));
+        let project = core.import_project("test", &novel_dir).expect("import");
+        let r1 = core.incremental_scan(&project.id).expect("first scan");
+        assert_eq!(r1.created, 2);
+
+        std::fs::remove_file(novel_dir.join("002.txt")).expect("remove");
+        let r2 = core.incremental_scan(&project.id).expect("second scan");
+        assert_eq!(r2.deleted, 1, "should detect deleted file");
+        assert_eq!(r2.created, 0);
+        assert_eq!(r2.modified, 0);
+    }
+
+    #[test]
+    fn incremental_scan_skips_analysis_when_nothing_changed() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let novel_dir = temp.path().join("novel");
+        std::fs::create_dir(&novel_dir).expect("novel dir");
+        std::fs::write(novel_dir.join("001.txt"), "第一章。").expect("write");
+
+        let core = NovelCore::from_storage(Storage::open_memory().expect("storage"));
+        let project = core.import_project("test", &novel_dir).expect("import");
+        let _ = core.incremental_scan(&project.id).expect("first scan");
+
+        // Second scan should detect nothing changed
+        let r2 = core.incremental_scan(&project.id).expect("second scan");
+        assert_eq!(r2.created, 0);
+        assert_eq!(r2.modified, 0);
+        assert_eq!(r2.deleted, 0);
+        assert_eq!(r2.unchanged, 1, "file should be unchanged");
+    }
 }

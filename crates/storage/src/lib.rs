@@ -2015,7 +2015,11 @@ impl Storage {
 
     pub fn set_document_volume(&self, document_id: &str, volume_id: &str) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO document_volumes (document_id, volume_id) VALUES (?1, ?2)",
+            "DELETE FROM document_volumes WHERE document_id = ?1",
+            params![document_id],
+        )?;
+        self.conn.execute(
+            "INSERT INTO document_volumes (document_id, volume_id) VALUES (?1, ?2)",
             params![document_id, volume_id],
         )?;
         Ok(())
@@ -2989,6 +2993,103 @@ mod tests {
         let names: HashSet<String> = groups.into_iter().map(|g| g.name).collect();
         assert!(names.contains("主线"));
         assert!(names.contains("支线"));
+        Ok(())
+    }
+
+    #[test]
+    fn create_volume_duplicate_name() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("vol_dup")?;
+        storage.create_volume(
+            &pid,
+            &NewVolume {
+                name: "卷一".into(),
+                description: "".into(),
+                sort_order: 0,
+            },
+        )?;
+        let result = storage.create_volume(
+            &pid,
+            &NewVolume {
+                name: "卷一".into(),
+                description: "".into(),
+                sort_order: 0,
+            },
+        );
+        assert!(result.is_err(), "duplicate volume name should fail");
+        Ok(())
+    }
+
+    #[test]
+    fn list_volumes_empty_project() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("vol_empty")?;
+        let vols = storage.list_volumes(&pid)?;
+        assert!(vols.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn set_document_volume_replaces_prior() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("vol_repl")?;
+        let v1 = storage.create_volume(
+            &pid,
+            &NewVolume {
+                name: "卷一".into(),
+                description: "".into(),
+                sort_order: 0,
+            },
+        )?;
+        let v2 = storage.create_volume(
+            &pid,
+            &NewVolume {
+                name: "卷二".into(),
+                description: "".into(),
+                sort_order: 1,
+            },
+        )?;
+        let doc_id = seed_document(&storage, &pid, "ch.txt")?;
+        storage.set_document_volume(&doc_id, &v1.id)?;
+        storage.set_document_volume(&doc_id, &v2.id)?;
+        let found = storage.document_volume(&doc_id)?;
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "卷二");
+        Ok(())
+    }
+
+    #[test]
+    fn create_group_duplicate_name() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("grp_dup")?;
+        storage.create_group(
+            &pid,
+            &NewDocGroup {
+                name: "主线".into(),
+                description: "".into(),
+            },
+        )?;
+        let result = storage.create_group(
+            &pid,
+            &NewDocGroup {
+                name: "主线".into(),
+                description: "".into(),
+            },
+        );
+        assert!(result.is_err(), "duplicate group name should fail");
+        Ok(())
+    }
+
+    #[test]
+    fn list_groups_empty_project() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("grp_empty")?;
+        let groups = storage.list_groups(&pid)?;
+        assert!(groups.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn groups_by_document_empty() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("grp_no_grp")?;
+        let doc_id = seed_document(&storage, &pid, "alone.txt")?;
+        let groups = storage.groups_by_document(&doc_id)?;
+        assert!(groups.is_empty());
         Ok(())
     }
 }

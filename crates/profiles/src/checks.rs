@@ -595,4 +595,50 @@ mod tests {
         assert!(!issues3.is_empty());
         assert_eq!(issues3[0].severity, "high");
     }
+
+    #[test]
+    fn anachronism_no_dynasty_terms_returns_empty() {
+        let check = CheckDefinition {
+            id: "时代穿帮检查".into(),
+            name: String::new(),
+            description: String::new(),
+            profile_id: "history".into(),
+            severity: "medium".into(),
+        };
+        let chunks = vec!["刺史大人用手机发了一条微信。"];
+        let knowledge = KnowledgePackIndex::default();
+        let issues = IssueEmitter::emit(&[check], &chunks, &knowledge);
+        assert!(issues.is_empty(), "no dynasty context = no issues");
+    }
+
+    #[test]
+    fn anachronism_modern_words_without_dynasty_context() {
+        let mut knowledge = KnowledgePackIndex::default();
+        knowledge.add_dynasty_terms("唐", &[]);
+        let check = CheckDefinition {
+            id: "时代穿帮检查".into(),
+            name: String::new(),
+            description: String::new(),
+            profile_id: "history".into(),
+            severity: "medium".into(),
+        };
+        let chunks = vec!["手机电脑都很好用。"];
+        let issues = IssueEmitter::emit(&[check], &chunks, &knowledge);
+        assert!(issues.is_empty(), "no dynasty terms in text = no issues");
+    }
+
+    #[test]
+    fn face_slap_diminishing_single_event_returns_none() {
+        let check = CheckDefinition {
+            id: "打脸边际递减".into(),
+            name: String::new(),
+            description: String::new(),
+            profile_id: "shuangwen".into(),
+            severity: "medium".into(),
+        };
+        // Only one event chunk
+        let chunks = vec!["一掌打脸反派，众人震惊得目瞪口呆。", "平淡无奇的叙述。"];
+        let issues = IssueEmitter::emit(&[check], &chunks, &KnowledgePackIndex::default());
+        assert!(issues.is_empty(), "single event cannot be diminishing");
+    }
 }

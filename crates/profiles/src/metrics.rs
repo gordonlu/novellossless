@@ -464,4 +464,28 @@ mod tests {
         let value = compute_metric(&mdef, &chunks);
         assert_eq!(value, 0.0, "boundary case should be 0: {value}");
     }
+
+    #[test]
+    fn modern_word_density_detects_words() {
+        let mdef = MetricDefinition {
+            metric_type: "时代穿帮风险".into(),
+            profile_id: "history".into(),
+            name: String::new(),
+            description: String::new(),
+            weight: 1.0,
+            kind: MetricKind::ModernWordDensity(vec!["手机".into(), "电脑".into()]),
+        };
+        let chunks = vec!["他用手机打电话，用电脑写代码。"];
+        let value = compute_metric(&mdef, &chunks);
+        assert!(value > 0.0, "should detect modern words: {value}");
+    }
+
+    #[test]
+    fn metric_kind_for_unknown_type_returns_empty() {
+        let kind = metric_kind_for("不存在的指标");
+        match kind {
+            MetricKind::KeywordDensity(kws) => assert!(kws.is_empty()),
+            _ => panic!("unknown type should map to empty KeywordDensity"),
+        }
+    }
 }
