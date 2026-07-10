@@ -240,6 +240,38 @@ pub struct WorldRule {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Volume {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub description: String,
+    pub sort_order: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewVolume {
+    pub name: String,
+    pub description: String,
+    pub sort_order: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocGroup {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub description: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewDocGroup {
+    pub name: String,
+    pub description: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TimelineEvent {
     pub id: String,
@@ -559,6 +591,37 @@ impl Storage {
                 updated_at TEXT NOT NULL,
                 resolved_at TEXT,
                 notes TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS volumes (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                UNIQUE(project_id, name)
+            );
+
+            CREATE TABLE IF NOT EXISTS doc_groups (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                UNIQUE(project_id, name)
+            );
+
+            CREATE TABLE IF NOT EXISTS document_volumes (
+                document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                volume_id TEXT NOT NULL REFERENCES volumes(id) ON DELETE CASCADE,
+                PRIMARY KEY (document_id, volume_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS document_groups (
+                document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                group_id TEXT NOT NULL REFERENCES doc_groups(id) ON DELETE CASCADE,
+                PRIMARY KEY (document_id, group_id)
             );
             "#,
         )?;
@@ -1895,6 +1958,222 @@ impl Storage {
             .map_err(Into::into)
     }
 
+    // ── Volumes ──
+
+    pub fn create_volume(&self, project_id: &str, volume: &NewVolume) -> Result<Volume> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO volumes (id, project_id, name, description, sort_order, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, project_id, volume.name, volume.description, volume.sort_order, now],
+        )?;
+        Ok(Volume {
+            id,
+            project_id: project_id.to_string(),
+            name: volume.name.clone(),
+            description: volume.description.clone(),
+            sort_order: volume.sort_order,
+            created_at: now,
+        })
+    }
+
+    pub fn update_volume(&self, id: &str, volume: &NewVolume) -> Result<()> {
+        self.conn.execute(
+            "UPDATE volumes SET name = ?1, description = ?2, sort_order = ?3 WHERE id = ?4",
+            params![volume.name, volume.description, volume.sort_order, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_volume(&self, id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM document_volumes WHERE volume_id = ?1",
+            params![id],
+        )?;
+        self.conn
+            .execute("DELETE FROM volumes WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn list_volumes(&self, project_id: &str) -> Result<Vec<Volume>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, name, description, sort_order, created_at FROM volumes WHERE project_id = ?1 ORDER BY sort_order ASC, name ASC",
+        )?;
+        let rows = stmt.query_map(params![project_id], |row| {
+            Ok(Volume {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                sort_order: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn set_document_volume(&self, document_id: &str, volume_id: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO document_volumes (document_id, volume_id) VALUES (?1, ?2)",
+            params![document_id, volume_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_document_volume(&self, document_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM document_volumes WHERE document_id = ?1",
+            params![document_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn document_volume(&self, document_id: &str) -> Result<Option<Volume>> {
+        self.conn.query_row(
+            "SELECT v.id, v.project_id, v.name, v.description, v.sort_order, v.created_at FROM volumes v JOIN document_volumes dv ON dv.volume_id = v.id WHERE dv.document_id = ?1",
+            params![document_id],
+            |row| Ok(Volume {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                sort_order: row.get(4)?,
+                created_at: row.get(5)?,
+            }),
+        ).optional().map_err(Into::into)
+    }
+
+    pub fn documents_by_volume(&self, volume_id: &str) -> Result<Vec<ProjectDocument>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT d.id, d.path, d.title, d.chapter_count, d.word_count, d.content_hash, d.last_modified_at
+             FROM documents d JOIN document_volumes dv ON dv.document_id = d.id
+             WHERE dv.volume_id = ?1 AND d.deleted = 0 ORDER BY d.path ASC",
+        )?;
+        let rows = stmt.query_map(params![volume_id], |row| {
+            Ok(ProjectDocument {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                title: row.get(2)?,
+                chapter_count: row.get(3)?,
+                word_count: row.get(4)?,
+                content_hash: row.get(5)?,
+                last_modified_at: row.get(6)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    // ── Doc Groups ──
+
+    pub fn create_group(&self, project_id: &str, group: &NewDocGroup) -> Result<DocGroup> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO doc_groups (id, project_id, name, description, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, project_id, group.name, group.description, now],
+        )?;
+        Ok(DocGroup {
+            id,
+            project_id: project_id.to_string(),
+            name: group.name.clone(),
+            description: group.description.clone(),
+            created_at: now,
+        })
+    }
+
+    pub fn update_group(&self, id: &str, group: &NewDocGroup) -> Result<()> {
+        self.conn.execute(
+            "UPDATE doc_groups SET name = ?1, description = ?2 WHERE id = ?3",
+            params![group.name, group.description, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_group(&self, id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM document_groups WHERE group_id = ?1",
+            params![id],
+        )?;
+        self.conn
+            .execute("DELETE FROM doc_groups WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn list_groups(&self, project_id: &str) -> Result<Vec<DocGroup>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, name, description, created_at FROM doc_groups WHERE project_id = ?1 ORDER BY name ASC",
+        )?;
+        let rows = stmt.query_map(params![project_id], |row| {
+            Ok(DocGroup {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn add_document_to_group(&self, document_id: &str, group_id: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO document_groups (document_id, group_id) VALUES (?1, ?2)",
+            params![document_id, group_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_document_from_group(&self, document_id: &str, group_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM document_groups WHERE document_id = ?1 AND group_id = ?2",
+            params![document_id, group_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn documents_by_group(&self, group_id: &str) -> Result<Vec<ProjectDocument>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT d.id, d.path, d.title, d.chapter_count, d.word_count, d.content_hash, d.last_modified_at
+             FROM documents d JOIN document_groups dg ON dg.document_id = d.id
+             WHERE dg.group_id = ?1 AND d.deleted = 0 ORDER BY d.path ASC",
+        )?;
+        let rows = stmt.query_map(params![group_id], |row| {
+            Ok(ProjectDocument {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                title: row.get(2)?,
+                chapter_count: row.get(3)?,
+                word_count: row.get(4)?,
+                content_hash: row.get(5)?,
+                last_modified_at: row.get(6)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn groups_by_document(&self, document_id: &str) -> Result<Vec<DocGroup>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT g.id, g.project_id, g.name, g.description, g.created_at
+             FROM doc_groups g JOIN document_groups dg ON dg.group_id = g.id
+             WHERE dg.document_id = ?1 ORDER BY g.name ASC",
+        )?;
+        let rows = stmt.query_map(params![document_id], |row| {
+            Ok(DocGroup {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
     fn update_status(&self, table: &str, id: &str, status: &str) -> Result<()> {
         let allowed_table = matches!(
             table,
@@ -1980,6 +2259,7 @@ fn make_snippet(content: &str, query: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn stores_and_searches_chunks() {
@@ -2495,6 +2775,220 @@ mod tests {
             confidence: 50,
         });
         assert!(result.is_err(), "duplicate PK should fail");
+        Ok(())
+    }
+
+    // ── Volume tests ──
+
+    #[test]
+    fn creates_and_lists_volumes() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("vol_test")?;
+        let v = storage.create_volume(
+            &pid,
+            &NewVolume {
+                name: "卷一".into(),
+                description: "初入江湖".into(),
+                sort_order: 1,
+            },
+        )?;
+        assert_eq!(v.name, "卷一");
+        let vols = storage.list_volumes(&pid)?;
+        assert_eq!(vols.len(), 1);
+        assert_eq!(vols[0].name, "卷一");
+        Ok(())
+    }
+
+    #[test]
+    fn updates_volume() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("vol_upd")?;
+        let v = storage.create_volume(
+            &pid,
+            &NewVolume {
+                name: "v1".into(),
+                description: "".into(),
+                sort_order: 1,
+            },
+        )?;
+        storage.update_volume(
+            &v.id,
+            &NewVolume {
+                name: "v1-updated".into(),
+                description: "desc".into(),
+                sort_order: 2,
+            },
+        )?;
+        let vols = storage.list_volumes(&pid)?;
+        assert_eq!(vols.len(), 1);
+        assert_eq!(vols[0].name, "v1-updated");
+        assert_eq!(vols[0].sort_order, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn deletes_volume_removes_assignments() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("vol_del")?;
+        let v = storage.create_volume(
+            &pid,
+            &NewVolume {
+                name: "v".into(),
+                description: "".into(),
+                sort_order: 0,
+            },
+        )?;
+        let doc_id = seed_document(&storage, &pid, "ch1.txt")?;
+        storage.set_document_volume(&doc_id, &v.id)?;
+        assert!(storage.document_volume(&doc_id)?.is_some());
+        storage.delete_volume(&v.id)?;
+        assert!(storage.document_volume(&doc_id)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn set_and_remove_document_volume() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("vol_doc")?;
+        let v = storage.create_volume(
+            &pid,
+            &NewVolume {
+                name: "卷甲".into(),
+                description: "".into(),
+                sort_order: 0,
+            },
+        )?;
+        let doc_id = seed_document(&storage, &pid, "ch1.txt")?;
+        storage.set_document_volume(&doc_id, &v.id)?;
+        let found = storage.document_volume(&doc_id)?;
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "卷甲");
+        storage.remove_document_volume(&doc_id)?;
+        assert!(storage.document_volume(&doc_id)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn documents_by_volume_returns_assigned_docs() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("vol_docs")?;
+        let v = storage.create_volume(
+            &pid,
+            &NewVolume {
+                name: "卷二".into(),
+                description: "".into(),
+                sort_order: 0,
+            },
+        )?;
+        let d1 = seed_document(&storage, &pid, "a.txt")?;
+        let d2 = seed_document(&storage, &pid, "b.txt")?;
+        storage.set_document_volume(&d1, &v.id)?;
+        storage.set_document_volume(&d2, &v.id)?;
+        let docs = storage.documents_by_volume(&v.id)?;
+        assert_eq!(docs.len(), 2);
+        Ok(())
+    }
+
+    // ── Group tests ──
+
+    #[test]
+    fn creates_and_lists_groups() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("grp_test")?;
+        let g = storage.create_group(
+            &pid,
+            &NewDocGroup {
+                name: "主线".into(),
+                description: "核心剧情".into(),
+            },
+        )?;
+        assert_eq!(g.name, "主线");
+        let groups = storage.list_groups(&pid)?;
+        assert_eq!(groups.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn updates_group() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("grp_upd")?;
+        let g = storage.create_group(
+            &pid,
+            &NewDocGroup {
+                name: "g1".into(),
+                description: "".into(),
+            },
+        )?;
+        storage.update_group(
+            &g.id,
+            &NewDocGroup {
+                name: "g1-updated".into(),
+                description: "desc".into(),
+            },
+        )?;
+        let groups = storage.list_groups(&pid)?;
+        assert_eq!(groups[0].name, "g1-updated");
+        Ok(())
+    }
+
+    #[test]
+    fn add_and_remove_document_group() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("grp_doc")?;
+        let g = storage.create_group(
+            &pid,
+            &NewDocGroup {
+                name: "支线".into(),
+                description: "".into(),
+            },
+        )?;
+        let doc_id = seed_document(&storage, &pid, "side.txt")?;
+        storage.add_document_to_group(&doc_id, &g.id)?;
+        let groups = storage.groups_by_document(&doc_id)?;
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].name, "支线");
+        storage.remove_document_from_group(&doc_id, &g.id)?;
+        let groups = storage.groups_by_document(&doc_id)?;
+        assert!(groups.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn documents_by_group_returns_assigned_docs() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("grp_docs")?;
+        let g = storage.create_group(
+            &pid,
+            &NewDocGroup {
+                name: "番外".into(),
+                description: "".into(),
+            },
+        )?;
+        let d1 = seed_document(&storage, &pid, "extra1.txt")?;
+        let d2 = seed_document(&storage, &pid, "extra2.txt")?;
+        storage.add_document_to_group(&d1, &g.id)?;
+        storage.add_document_to_group(&d2, &g.id)?;
+        let docs = storage.documents_by_group(&g.id)?;
+        assert_eq!(docs.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn document_in_multiple_groups() -> Result<()> {
+        let (storage, pid) = test_storage_with_project("grp_multi")?;
+        let g1 = storage.create_group(
+            &pid,
+            &NewDocGroup {
+                name: "主线".into(),
+                description: "".into(),
+            },
+        )?;
+        let g2 = storage.create_group(
+            &pid,
+            &NewDocGroup {
+                name: "支线".into(),
+                description: "".into(),
+            },
+        )?;
+        let doc_id = seed_document(&storage, &pid, "mixed.txt")?;
+        storage.add_document_to_group(&doc_id, &g1.id)?;
+        storage.add_document_to_group(&doc_id, &g2.id)?;
+        let groups = storage.groups_by_document(&doc_id)?;
+        assert_eq!(groups.len(), 2);
+        let names: HashSet<String> = groups.into_iter().map(|g| g.name).collect();
+        assert!(names.contains("主线"));
+        assert!(names.contains("支线"));
         Ok(())
     }
 }
