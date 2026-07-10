@@ -580,12 +580,18 @@ export function App() {
             <span>{notice}</span>
           </div>
           {error && <div className="error">{error}</div>}
-          {scanProgress && (
+          {scanProgress && scanProgress.total > 0 && (
             <div className="scan-progress-bar">
               <div className="scan-progress-fill" style={{ width: `${(scanProgress.current / scanProgress.total) * 100}%` }} />
               <span className="scan-progress-label">
                 {scanProgress.current} / {scanProgress.total} · {scanProgress.file}
               </span>
+            </div>
+          )}
+          {scanProgress && scanProgress.total === 0 && (
+            <div className="scan-progress-bar">
+              <div className="scan-progress-fill" style={{ width: "0%" }} />
+              <span className="scan-progress-label">{scanProgress.file}</span>
             </div>
           )}
         </section>

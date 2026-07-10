@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Network } from "lucide-react";
 import { clsx } from "clsx";
-import { listForeshadows, ForeshadowItem } from "../tauri";
+import { listForeshadows, updateForeshadowStatus, ForeshadowItem } from "../tauri";
 import { StatusButtons } from "../components/StatusButtons";
 import { InspectorPanel } from "../components/InspectorPanel";
 import { riskLabel } from "../lib/helpers";
@@ -26,6 +26,17 @@ export function Foreshadows({ projectId }: Props) {
     }
   }, [projectId]);
 
+  const handleStatus = async (id: string, status: string) => {
+    try {
+      await updateForeshadowStatus(id, status);
+      const updated = await listForeshadows(projectId, 50);
+      setItems(updated);
+      setSelected((prev) => (prev?.id === id ? updated.find((f) => f.id === id) ?? null : prev));
+    } catch {
+      // silent
+    }
+  };
+
   return (
     <section className="content-grid">
       <div className="primary-column">
@@ -49,7 +60,10 @@ export function Foreshadows({ projectId }: Props) {
                     </p>
                   </div>
                   <div className="row-actions">
-                    <StatusButtons onConfirm={() => {}} onDismiss={() => {}} />
+                    <StatusButtons
+                      onConfirm={() => handleStatus(item.id, "confirmed")}
+                      onDismiss={() => handleStatus(item.id, "false_positive")}
+                    />
                   </div>
                 </article>
               ))

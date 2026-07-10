@@ -12,7 +12,7 @@ impl Extractor for ItemExtractor {
             "钥匙", "信", "戒指", "刀", "剑", "书", "照片", "芯片", "卷轴", "玉佩", "伞", "令牌",
             "地图", "药瓶", "手札", "玉简",
         ];
-        let noun_pattern = format!(r"([\p{{Han}}]{{0,4}}(?:{}))", item_nouns.join("|"));
+        let noun_pattern = format!(r"(?:\p{{Han}}{{0,4}}?)({})", item_nouns.join("|"));
         let Ok(patterns) = vec![
             Regex::new(&noun_pattern),
             Regex::new(r"(?:拿起|藏起|交给|寻找|丢失|夺走|握住)([\p{Han}]{1,6})"),

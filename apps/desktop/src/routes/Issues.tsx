@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { clsx } from "clsx";
-import { listIssues, ContinuityIssue } from "../tauri";
+import { listIssues, updateIssueStatus, ContinuityIssue } from "../tauri";
 import { StatusButtons } from "../components/StatusButtons";
 import { InspectorPanel } from "../components/InspectorPanel";
 import { severityLabel } from "../lib/helpers";
@@ -27,6 +27,17 @@ export function Issues({ projectId }: Props) {
     }
   }, [projectId]);
 
+  const handleStatus = async (id: string, status: string) => {
+    try {
+      await updateIssueStatus(id, status);
+      const updated = await listIssues(projectId, 50);
+      setIssues(updated);
+      setSelected((prev) => (prev?.id === id ? updated.find((i) => i.id === id) ?? null : prev));
+    } catch {
+      // silent
+    }
+  };
+
   return (
     <section className="content-grid">
       <div className="primary-column">
@@ -50,7 +61,10 @@ export function Issues({ projectId }: Props) {
                     <p>{issue.description}</p>
                   </div>
                   <div className="row-actions">
-                    <StatusButtons onConfirm={() => {}} onDismiss={() => {}} />
+                    <StatusButtons
+                      onConfirm={() => handleStatus(issue.id, "resolved")}
+                      onDismiss={() => handleStatus(issue.id, "false_positive")}
+                    />
                   </div>
                 </article>
               ))

@@ -2340,4 +2340,186 @@ mod tests {
         assert_eq!(r2.deleted, 0);
         assert_eq!(r2.unchanged, 1, "file should be unchanged");
     }
+
+    #[test]
+    fn author_full_workflow_smoke_test() -> Result<()> {
+        // Phase 0: Prepare project directory
+        let temp = tempfile::tempdir()?;
+        let novel_dir = temp.path().join("my_novel");
+        std::fs::create_dir_all(&novel_dir)?;
+
+        // Two text files + one binary file that should be skipped
+        std::fs::write(
+            novel_dir.join("001.txt"),
+            "第一章 雨夜\n林澈在雨夜中醒来，发现枕边多了一把铜钥匙。窗外钟声响起。沈微推门而入。\n第二章 铜锁\n林澈对沈微说：「这钥匙是哪里来的？」沈微摇头。",
+        )?;
+        std::fs::write(
+            novel_dir.join("002.txt"),
+            "第三章 钟楼\n林澈前往城东旧钟楼。沈微已在等他。\n第四章 秘密\n「你父亲留下的。」沈微说。林澈攥紧了钥匙。",
+        )?;
+        std::fs::write(novel_dir.join("notes.bin"), b"\xFF\xFE\x00\x01\x02\x03")?;
+
+        // Phase 1: Init + Import
+        let core = NovelCore::from_storage(Storage::open_memory()?);
+        let project = core.import_project("我的小说", &novel_dir)?;
+        assert!(!project.id.is_empty());
+        assert_eq!(project.name, "我的小说");
+
+        // Phase 2: Full scan
+        let report = core.scan_project(&project.id)?;
+        assert_eq!(report.scanned_documents, 2, "two text files scanned");
+        // .bin files are filtered by extension, not counted as errors
+        assert_eq!(report.summary.document_count, 2);
+        assert!(
+            report.summary.chunk_count >= 3,
+            "multiple chapters: {}",
+            report.summary.chunk_count
+        );
+        assert!(report.summary.total_words > 0);
+        assert!(report.analysis.person_candidates >= 1, "should find 林澈");
+        assert!(report.analysis.item_candidates >= 1, "should find 钥匙");
+
+        // Phase 3: Search
+        let hits = core.search(&project.id, "林澈", 10)?;
+        assert!(!hits.is_empty(), "林澈 should be findable");
+        let has_correct_title = hits
+            .iter()
+            .any(|h| h.title.contains("雨夜") || h.title.contains("铜锁"));
+        assert!(has_correct_title, "search should return real content");
+
+        // Phase 4: Candidates
+        let people = core.list_candidates(&project.id, Some("person"), 20)?;
+        // Person extractor detects names before speech verbs (说/问/道)
+        assert!(
+            people.iter().any(|c| c.name == "沈微"),
+            "沈微应被提取（沈微+说/道）"
+        );
+        assert!(
+            people.len() >= 1,
+            "should find at least one person candidate"
+        );
+        let items = core.list_candidates(&project.id, Some("item"), 20)?;
+        assert!(
+            items.iter().any(|c| c.name == "钥匙"),
+            "钥匙 should be an item candidate"
+        );
+
+        // Phase 5: Foreshadows
+        let _foreshadows = core.list_foreshadows(&project.id, 20)?;
+        // "钥匙" + "钟声" might trigger foreshadow detection — just check no crash
+
+        // Phase 6: Issues (profile checks)
+        let _issues = core.list_issues(&project.id, 20)?;
+        // At minimum, should not crash; might find anachronism or other checks
+
+        // Phase 7: Context pack
+        let pack = core.build_context_pack(&project.id, "钥匙", 5)?;
+        assert!(
+            pack.content.contains("钥匙"),
+            "context should mention the query term"
+        );
+        assert!(
+            pack.content.contains("来源文件"),
+            "context should list source files"
+        );
+
+        // Phase 8: Profiles
+        let available = core.get_available_profiles()?;
+        assert!(
+            available.iter().any(|p| p.id == "common_longform"),
+            "default profile should exist"
+        );
+
+        // Phase 9: Incremental scan (no changes)
+        let r2 = core.incremental_scan(&project.id)?;
+        assert_eq!(r2.created, 0, "nothing new");
+        assert_eq!(r2.modified, 0, "nothing modified");
+        assert_eq!(r2.unchanged, 2, "both files unchanged");
+        assert_eq!(r2.deleted, 0);
+
+        // Phase 10: Modify a file + incremental scan
+        // Ensure mtime changes (filesystem second-granularity)
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        std::fs::write(
+            novel_dir.join("001.txt"),
+            "第一章 雨夜（修订版）\n林澈在雨夜中醒来，发现枕边多了一把铜钥匙。沈微推门而入。",
+        )?;
+        let r3 = core.incremental_scan(&project.id)?;
+        assert_eq!(r3.modified, 1, "001.txt was modified");
+        assert_eq!(r3.unchanged, 1, "002.txt unchanged");
+        assert!(r3.scanned_documents >= 1);
+
+        // Phase 11: Delete a file + incremental scan
+        std::fs::remove_file(novel_dir.join("002.txt"))?;
+        let r4 = core.incremental_scan(&project.id)?;
+        assert_eq!(r4.deleted, 1, "002.txt was deleted");
+        assert_eq!(r4.unchanged, 1, "001.txt still present");
+
+        // Phase 12: Scan run tracking
+        let runs = core.list_scan_runs(&project.id)?;
+        assert!(
+            runs.len() >= 2,
+            "should have multiple scan runs: {}",
+            runs.len()
+        );
+        let completed: Vec<_> = runs.iter().filter(|r| r.status == "completed").collect();
+        assert!(completed.len() >= 2, "multiple completed runs");
+
+        // Phase 13: Volumes
+        let vol = core.storage.create_volume(
+            &project.id,
+            &novellossless_storage::NewVolume {
+                name: "第一卷".into(),
+                description: "初入江湖".into(),
+                sort_order: 1,
+            },
+        )?;
+        let vols = core.storage.list_volumes(&project.id)?;
+        assert_eq!(vols.len(), 1);
+        assert_eq!(vols[0].name, "第一卷");
+
+        // Assign remaining document to volume
+        let docs = core.storage.project_documents(&project.id)?;
+        assert!(!docs.is_empty(), "at least one doc after delete");
+        core.storage.set_document_volume(&docs[0].id, &vol.id)?;
+        let dv = core.storage.document_volume(&docs[0].id)?;
+        assert!(dv.is_some());
+        assert_eq!(dv.unwrap().name, "第一卷");
+
+        // Phase 14: Groups
+        let grp = core.storage.create_group(
+            &project.id,
+            &novellossless_storage::NewDocGroup {
+                name: "主线".into(),
+                description: "核心剧情".into(),
+            },
+        )?;
+        core.storage.add_document_to_group(&docs[0].id, &grp.id)?;
+        let grps = core.storage.groups_by_document(&docs[0].id)?;
+        assert_eq!(grps.len(), 1);
+        assert_eq!(grps[0].name, "主线");
+        let group_docs = core.storage.documents_by_group(&grp.id)?;
+        assert_eq!(group_docs.len(), 1);
+
+        // Phase 15: Resume scan (simulate interrupted scan)
+        let _run = core
+            .storage
+            .create_scan_run(&novellossless_storage::NewScanRun {
+                project_id: project.id.clone(),
+                scan_type: "full".into(),
+                total_files: 99,
+            })?;
+        let incomplete = core.get_incomplete_scan_run(&project.id)?;
+        assert!(incomplete.is_some(), "should find incomplete run");
+        // Abandon it
+        core.abandon_incomplete_scan_runs(&project.id)?;
+        let after = core.get_incomplete_scan_run(&project.id)?;
+        assert!(after.is_none(), "should be abandoned");
+
+        // Phase 16: Tasks
+        let _tasks = core.list_tasks(&project.id)?;
+        // Tasks may be empty or populated depending on analysis results — just check no crash
+
+        Ok(())
+    }
 }

@@ -38,7 +38,13 @@ fn extract_dialogue_patterns(content: &str) -> Vec<String> {
             let abs_pos = search_from + guide_pos;
             let after = &content[abs_pos + guide.len()..];
             if after.starts_with('：') || after.starts_with(':') {
-                let before_start = if abs_pos >= 8 { abs_pos - 8 } else { 0 };
+                let before_start = content[..abs_pos]
+                    .char_indices()
+                    .rev()
+                    .take(8)
+                    .last()
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
                 let before = &content[before_start..abs_pos];
                 let speaker: String = before
                     .chars()

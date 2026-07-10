@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronRight, UserRound } from "lucide-react";
 import { clsx } from "clsx";
-import { listCandidates, NarrativeNode } from "../tauri";
+import { listCandidates, updateCandidateStatus, NarrativeNode } from "../tauri";
 import { StatusButtons } from "../components/StatusButtons";
 import { InspectorPanel } from "../components/InspectorPanel";
 import { statusLabel } from "../lib/helpers";
@@ -19,6 +19,17 @@ export function Characters({ projectId }: Props) {
       listCandidates(projectId, "person", 50).then(setCharacters);
     }
   }, [projectId]);
+
+  const handleStatus = async (id: string, status: string) => {
+    try {
+      await updateCandidateStatus(id, status);
+      const updated = await listCandidates(projectId, "person", 50);
+      setCharacters(updated);
+      setSelected((prev) => (prev?.id === id ? updated.find((c) => c.id === id) ?? null : prev));
+    } catch {
+      // silent
+    }
+  };
 
   return (
     <section className="content-grid">
@@ -42,8 +53,8 @@ export function Characters({ projectId }: Props) {
                   </div>
                   <div className="row-actions">
                     <StatusButtons
-                      onConfirm={() => {}}
-                      onDismiss={() => {}}
+                      onConfirm={() => handleStatus(c.id, "confirmed")}
+                      onDismiss={() => handleStatus(c.id, "false_positive")}
                     />
                     <ChevronRight size={17} />
                   </div>

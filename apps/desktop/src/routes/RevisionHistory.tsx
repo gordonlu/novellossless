@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { History, ChevronRight, RefreshCw, Play, Square } from "lucide-react";
-import { listFileScans, listRevisions, incrementalScan, startWatching, stopWatching, watcherStatus, FileScanLog, RevisionRecord } from "../tauri";
+import { getDocumentChunks, listFileScans, listRevisions, incrementalScan, startWatching, stopWatching, watcherStatus, FileScanLog, RevisionRecord } from "../tauri";
 
 interface Props {
   projectId: string;
@@ -22,10 +22,20 @@ export function RevisionHistory({ projectId }: Props) {
   const [selectedDoc, setSelectedDoc] = useState<string | null>(null);
   const [watching, setWatching] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [docTitles, setDocTitles] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (projectId && projectId !== "demo") {
-      listFileScans(projectId, 100).then(setScans);
+      listFileScans(projectId, 100).then((scans) => {
+        setScans(scans);
+        getDocumentChunks(projectId).then((tree) => {
+          const map: Record<string, string> = {};
+          for (const doc of tree.documents) {
+            map[doc.id] = doc.title || doc.path;
+          }
+          setDocTitles(map);
+        });
+      });
       watcherStatus().then(setWatching);
     }
   }, [projectId]);
@@ -78,7 +88,7 @@ export function RevisionHistory({ projectId }: Props) {
               >
                 <div>
                   <strong>
-                    {s.documentId.slice(0, 8)}
+                    {docTitles[s.documentId] ?? s.documentId.slice(0, 8)}
                     <span className={eventColors[s.eventType] ?? ""}>{eventLabels[s.eventType] ?? s.eventType}</span>
                   </strong>
                   <p>{s.eventType === "modified" ? `${s.oldHash?.slice(0, 8)} → ${s.newHash.slice(0, 8)}` : s.newHash.slice(0, 16)} · {s.scannedAt}</p>
