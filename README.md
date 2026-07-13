@@ -110,6 +110,4 @@ profiles/
   demo/             内置示例项目
 ```
 
-## 依赖边界
 
-`deeplossless` 固定到发布版 crate `=0.7.4`。本地 `D:\deeplossless` 仅作为参考源码目录。
