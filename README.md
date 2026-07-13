@@ -18,16 +18,14 @@ novellossless 不是"替作者写小说"的 AI 工具，而是一个帮助作者
 - 创建/导入项目（支持单文件、多文件目录）
 - TXT / Markdown 扫描（UTF-8、GBK、GB18030 自动识别）
 - 章节识别（第一章、第1章、Chapter 1、楔子 等）
-- 增量扫描 + 文件监听（800ms debounce）
+- 增量扫描 + 文件变更监听（800ms 去抖）
 - 改稿记录与版本 Diff
 
-### 记忆卡片系统
-- 人物候选抽取
+### 记忆卡片
+- 人物候选抽取与确认/误报标记
 - 地点候选抽取
 - 物件候选抽取
 - 来源证据定位与跳转
-- 用户确认/误报状态管理
-- 别名管理
 
 ### 创作审查
 - 伏笔候选与伏笔账本
@@ -35,12 +33,12 @@ novellossless 不是"替作者写小说"的 AI 工具，而是一个帮助作者
 - 重复描写检测（5 种检测器）
 - 设定规则系统（手动创建 + 自动抽取）
 - 时间线抽取与异常检测
-- 修订任务（自动从冲突/伏笔创建）
+- 修订任务（搜索结果可一键建任务；扫描时自动从冲突/伏笔创建）
 - 改稿影响分析
 
 ### 上下文包
-- 按章节、人物、伏笔维度生成上下文包
-- 支持 Markdown / Plain Text 导出格式
+- 按关键词查询生成上下文包（Markdown 导出）
+- 全项目分析报告（Markdown 导出）
 
 ### 创作模式包
 - 通用长篇模式（默认启用）
@@ -53,7 +51,7 @@ novellossless 不是"替作者写小说"的 AI 工具，而是一个帮助作者
 - 系统托盘 + 关闭至托盘
 - 备份与恢复
 - 内置示例项目（三国演义 5 章）
-- 设置页（存储模式、备份）
+- 设置页（界面、扫描、隐私、AI 配置、备份）
 
 ## 快速开始
 
@@ -83,7 +81,7 @@ cargo run -p novellossless-cli -- --db novellossless.db tasks --project <id>
 | 层 | 技术 |
 |---|---|
 | 桌面壳 | Tauri 2 |
-| 前端 | React + Vite + Tailwind CSS |
+| 前端 | React + Vite |
 | 后端 | Rust（多 crate 工作区） |
 | 存储 | SQLite（rusqlite bundled） |
 | 搜索 | SQLite FTS5 + LIKE 回退（中文适配） |
@@ -95,7 +93,7 @@ apps/
   cli/          命令行验证入口
   desktop/      Tauri 桌面应用
 crates/
-  core/         核心编排逻辑（扫描、分析、搜索）
+  core/         核心编排逻辑（扫描、分析、搜索、AI provider 管理）
   storage/      SQLite 存储层
   parser/       文本解码与章节拆分
   profiles/     创作模式包加载与运行时
@@ -104,7 +102,7 @@ crates/
   tasks/        修订任务管理
   impact/       改稿影响分析
   repeated/     重复描写检测（5 种检测器）
-  ai/           AI Provider 接口（预留）
+  ai/           AI Provider 接口
 profiles/
   common_longform/  通用长篇模式
   shuangwen/        爽文模式
