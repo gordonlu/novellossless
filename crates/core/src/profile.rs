@@ -1,8 +1,8 @@
 use std::path::Path;
 
 pub use novellossless_profiles::{
-    ExtractorRules, IssueEmitter, KnowledgePackIndex, KnowledgePackLoader, MetricRegistry,
-    PeopleConfig, ProfileLoader, ProfileManifest, ProfileRules,
+    ExtractorRules, IssueEmitter, KnowledgePackEntry, KnowledgePackIndex, KnowledgePackLoader,
+    MetricRegistry, PeopleConfig, ProfileLoader, ProfileManifest, ProfileRules,
 };
 
 #[derive(Debug, Clone)]

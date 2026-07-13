@@ -28,7 +28,7 @@ impl IssueEmitter {
                         issues.push(issue);
                     }
                 }
-                "身份地位冲突" => {
+                "角色身份地位冲突" | "身份地位冲突" => {
                     if let Some(issue) = check_identity_status_conflict(check, chunks) {
                         issues.push(issue);
                     }
@@ -48,10 +48,17 @@ impl IssueEmitter {
                     issues.extend(found);
                 }
                 "官职品级冲突" => {
-                    // stub — needs per-person tracking across chapters
+                    let found = check_official_rank_conflict(check, chunks);
+                    issues.extend(found);
                 }
                 "地名时代检查" => {
-                    // stub — needs gazetteer knowledge
+                    let found = check_place_name_anachronism(check, chunks, knowledge);
+                    issues.extend(found);
+                }
+                "章节长度异常" => {
+                    if let Some(issue) = check_chapter_length_anomaly(check, chunks) {
+                        issues.push(issue);
+                    }
                 }
                 _ => {}
             }
@@ -423,6 +430,170 @@ fn check_face_slap_diminishing(check: &CheckDefinition, chunks: &[&str]) -> Opti
         evidence_json: serde_json::to_string(&evidence).unwrap_or_default(),
         suggested_actions_json: r#"["调整冲突节奏","增加事件变化","重组章节顺序"]"#.to_string(),
     })
+}
+
+fn check_official_rank_conflict(check: &CheckDefinition, chunks: &[&str]) -> Vec<CheckIssue> {
+    // Track which official ranks appear near which character names across chunks.
+    // If the same character name appears with different rank levels, flag a conflict.
+    let high_ranks = [
+        "丞相",
+        "尚书",
+        "中书令",
+        "太尉",
+        "司徒",
+        "司空",
+        "御史大夫",
+        "大将军",
+    ];
+    let mid_ranks = [
+        "侍郎",
+        "郎中",
+        "员外郎",
+        "刺史",
+        "太守",
+        "都督",
+        "将军",
+        "校尉",
+    ];
+    let low_ranks = [
+        "县令", "县尉", "主簿", "参军", "录事", "典史", "巡检", "驿丞",
+    ];
+
+    use std::collections::{HashMap, HashSet};
+    let mut char_ranks: HashMap<String, HashSet<&'static str>> = HashMap::new();
+    let mut evidence: Vec<String> = Vec::new();
+
+    for (ci, chunk) in chunks.iter().enumerate() {
+        for &rank_list in &[&high_ranks[..], &mid_ranks[..], &low_ranks[..]] {
+            for &rank in rank_list {
+                if let Some(pos) = chunk.find(rank) {
+                    let names = extract_nearby_names(chunk, rank, pos);
+                    for name in names {
+                        let tier = if high_ranks.contains(&rank) {
+                            "high"
+                        } else if mid_ranks.contains(&rank) {
+                            "mid"
+                        } else {
+                            "low"
+                        };
+                        let entry = char_ranks.entry(name.clone()).or_default();
+                        if !entry.contains(tier) {
+                            // Check for existing different-tier entries
+                            let conflicts: Vec<&str> =
+                                entry.iter().filter(|t| *t != &tier).copied().collect();
+                            if !conflicts.is_empty() {
+                                evidence.push(format!(
+                                    "第{}章: 「{}」同时关联{}({})和之前章节的{}",
+                                    ci + 1,
+                                    name,
+                                    rank,
+                                    tier,
+                                    conflicts.join(","),
+                                ));
+                            }
+                            entry.insert(tier);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if evidence.is_empty() {
+        Vec::new()
+    } else {
+        vec![CheckIssue {
+            issue_type: check.id.clone(),
+            severity: "medium".to_string(),
+            title: "官职品级冲突".to_string(),
+            description: "同一人物在不同章节关联了不同品级的官职，可能前后冲突。".to_string(),
+            evidence_json: serde_json::to_string(&evidence).unwrap_or_default(),
+            suggested_actions_json:
+                r#"["确认是否为升迁或降职","检查是否同一人物","补充过渡说明","标记为误报"]"#
+                    .to_string(),
+        }]
+    }
+}
+
+fn check_place_name_anachronism(
+    check: &CheckDefinition,
+    chunks: &[&str],
+    knowledge: &KnowledgePackIndex,
+) -> Vec<CheckIssue> {
+    // Use knowledge pack to get dynasty-specific place names, then check if
+    // they appear in contexts that mention other dynasties.
+    let tang_places = knowledge.terms_for_dynasty("唐");
+    if tang_places.is_empty() {
+        return Vec::new();
+    }
+
+    let other_dynasties = [
+        ("汉", vec!["西汉", "东汉", "汉武帝", "汉朝"]),
+        ("宋", vec!["北宋", "南宋", "宋朝", "赵匡胤"]),
+        ("明", vec!["明朝", "朱元璋", "永乐"]),
+        ("清", vec!["清朝", "乾隆", "康熙"]),
+    ];
+
+    let mut issues = Vec::new();
+    for (ci, chunk) in chunks.iter().enumerate() {
+        let has_tang_place = tang_places.iter().any(|p| chunk.contains(p));
+        if !has_tang_place {
+            continue;
+        }
+        for (dynasty, markers) in &other_dynasties {
+            if markers.iter().any(|m| chunk.contains(*m)) {
+                issues.push(CheckIssue {
+                    issue_type: check.id.clone(),
+                    severity: "medium".to_string(),
+                    title: "地名时代检查".to_string(),
+                    description: format!(
+                        "唐代地名与「{dynasty}」时代表述同时出现，可能存在时代混淆。"
+                    ),
+                    evidence_json: format!(
+                        r#"["章节{}: 唐代地名与{}时代表述共存"]"#,
+                        ci + 1,
+                        dynasty
+                    ),
+                    suggested_actions_json:
+                        r#"["确认是否为跨时代参照","检查是否为写作用语","标记为误报"]"#.to_string(),
+                });
+            }
+        }
+    }
+    issues
+}
+
+fn check_chapter_length_anomaly(check: &CheckDefinition, chunks: &[&str]) -> Option<CheckIssue> {
+    if chunks.len() < 3 {
+        return None;
+    }
+    let lengths: Vec<usize> = chunks.iter().map(|c| c.chars().count()).collect();
+    let avg: f64 = lengths.iter().sum::<usize>() as f64 / lengths.len() as f64;
+    if avg < 10.0 {
+        return None; // not enough data
+    }
+    let threshold = avg * 2.5;
+    for (i, &len) in lengths.iter().enumerate() {
+        if (len as f64) > threshold {
+            let ratio = len as f64 / avg;
+            return Some(CheckIssue {
+                issue_type: check.id.clone(),
+                severity: "low".to_string(),
+                title: "章节长度异常".to_string(),
+                description: format!(
+                    "第{}章长度为 {:.0} 字，是平均 ({:.0} 字) 的 {:.1} 倍，可能过长。",
+                    i + 1,
+                    len,
+                    avg,
+                    ratio,
+                ),
+                evidence_json: format!(r#"["章节{}: {}字, 平均{}字"]"#, i + 1, len, avg as usize),
+                suggested_actions_json: r#"["考虑拆分章节","确认是否信息密度足够","标记为无问题"]"#
+                    .to_string(),
+            });
+        }
+    }
+    None
 }
 
 #[cfg(test)]

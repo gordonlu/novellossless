@@ -166,7 +166,7 @@ fn main() -> Result<()> {
             }
         }
         Command::Issues { project_id, limit } => {
-            for issue in core.list_issues(&project_id, limit)? {
+            for issue in core.list_issues(&project_id, limit, None)? {
                 println!(
                     "{} | {} | status={} | {}",
                     issue.severity, issue.title, issue.status, issue.description

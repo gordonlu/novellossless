@@ -23,6 +23,8 @@ novellossless-tasks = { path = "../tasks" }
 novellossless-impact = { path = "../impact" }
 novellossless-ai = { path = "../ai" }
 novellossless-repeated = { path = "../repeated" }
+keyring = { version = "4.1.4", default-features = false, features = ["v1", "apple-native-keyring-store", "windows-native-keyring-store", "zbus-secret-service-keyring-store"] }
+rayon.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

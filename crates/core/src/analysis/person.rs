@@ -79,14 +79,62 @@ impl PersonExtractor {
     fn is_valid_person_name(&self, name: &str) -> bool {
         let stopwords = [
             "自己", "什么", "这里", "那里", "哪里", "这个", "那个", "他们", "我们", "你们", "没有",
-            "不是", "已经", "突然",
+            "不是", "已经", "突然", "之后", "以前", "此时", "这时", "那时", "一边",
         ];
         let len = name.chars().count();
-        len >= self.people_config.min_name_length as usize
-            && len <= self.people_config.max_name_length as usize
-            && !stopwords.contains(&name)
-            && !name.ends_with("里")
-            && !name.ends_with("中")
+        if len < self.people_config.min_name_length as usize
+            || len > self.people_config.max_name_length as usize
+        {
+            return false;
+        }
+        if stopwords.contains(&name) {
+            return false;
+        }
+        // Reject structural particles that indicate non-name phrases
+        if name.starts_with('的')
+            || name.starts_with('了')
+            || name.starts_with('在')
+            || name.starts_with('一')
+            || name.starts_with('不')
+            || name.starts_with('这')
+            || name.starts_with('那')
+            || name.starts_with('什')
+            || name.starts_with('怎')
+        {
+            return false;
+        }
+        // Reject names ending with common sentence-final particles
+        if name.ends_with('吗')
+            || name.ends_with('么')
+            || name.ends_with('的')
+            || name.ends_with('了')
+            || name.ends_with('着')
+            || name.ends_with('过')
+        {
+            return false;
+        }
+        // Reject names containing possessive or structural particles mid-word
+        if name.contains('的')
+            || name.contains('了')
+            || name.contains('在')
+            || name.contains("一个")
+            || name.contains("这个")
+            || name.contains("那个")
+            || name.contains("什么")
+        {
+            return false;
+        }
+        // Reject location/direction suffixes unlikely in person names
+        if name.ends_with("里")
+            || name.ends_with("中")
+            || name.ends_with("上")
+            || name.ends_with("下")
+            || name.ends_with("前")
+            || name.ends_with("后")
+        {
+            return false;
+        }
+        true
     }
 
     fn merge_aliases(

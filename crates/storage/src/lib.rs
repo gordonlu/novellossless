@@ -1201,42 +1201,78 @@ impl Storage {
         &self,
         project_id: &str,
         limit: i64,
+        issue_type_prefix: Option<&str>,
     ) -> Result<Vec<ContinuityIssue>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT id, project_id, issue_type, severity, title, description, evidence_json,
-                   suggested_actions_json, status
-            FROM continuity_issues
-            WHERE project_id = ?1
-            ORDER BY
-                CASE severity
-                    WHEN 'serious' THEN 0
-                    WHEN 'high' THEN 1
-                    WHEN 'medium' THEN 2
-                    WHEN 'low' THEN 3
-                    ELSE 4
-                END,
-                updated_at DESC
-            LIMIT ?2
-            "#,
-        )?;
-
-        let rows = stmt.query_map(params![project_id, limit], |row| {
-            Ok(ContinuityIssue {
-                id: row.get(0)?,
-                project_id: row.get(1)?,
-                issue_type: row.get(2)?,
-                severity: row.get(3)?,
-                title: row.get(4)?,
-                description: row.get(5)?,
-                evidence_json: row.get(6)?,
-                suggested_actions_json: row.get(7)?,
-                status: row.get(8)?,
-            })
-        })?;
-
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
+        if let Some(prefix) = issue_type_prefix {
+            let pattern = format!("{}%", prefix);
+            let mut stmt = self.conn.prepare(
+                r#"
+                SELECT id, project_id, issue_type, severity, title, description, evidence_json,
+                       suggested_actions_json, status
+                FROM continuity_issues
+                WHERE project_id = ?1 AND issue_type LIKE ?2
+                ORDER BY
+                    CASE severity
+                        WHEN 'serious' THEN 0
+                        WHEN 'high' THEN 1
+                        WHEN 'medium' THEN 2
+                        WHEN 'low' THEN 3
+                        ELSE 4
+                    END,
+                    updated_at DESC
+                LIMIT ?3
+                "#,
+            )?;
+            let rows = stmt.query_map(params![project_id, pattern, limit], |row| {
+                Ok(ContinuityIssue {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    issue_type: row.get(2)?,
+                    severity: row.get(3)?,
+                    title: row.get(4)?,
+                    description: row.get(5)?,
+                    evidence_json: row.get(6)?,
+                    suggested_actions_json: row.get(7)?,
+                    status: row.get(8)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        } else {
+            let mut stmt = self.conn.prepare(
+                r#"
+                SELECT id, project_id, issue_type, severity, title, description, evidence_json,
+                       suggested_actions_json, status
+                FROM continuity_issues
+                WHERE project_id = ?1
+                ORDER BY
+                    CASE severity
+                        WHEN 'serious' THEN 0
+                        WHEN 'high' THEN 1
+                        WHEN 'medium' THEN 2
+                        WHEN 'low' THEN 3
+                        ELSE 4
+                    END,
+                    updated_at DESC
+                LIMIT ?2
+                "#,
+            )?;
+            let rows = stmt.query_map(params![project_id, limit], |row| {
+                Ok(ContinuityIssue {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    issue_type: row.get(2)?,
+                    severity: row.get(3)?,
+                    title: row.get(4)?,
+                    description: row.get(5)?,
+                    evidence_json: row.get(6)?,
+                    suggested_actions_json: row.get(7)?,
+                    status: row.get(8)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        }
     }
 
     pub fn update_narrative_node_status(&self, id: &str, status: &str) -> Result<()> {
@@ -1309,7 +1345,8 @@ impl Storage {
                 created_at: row.get(7)?,
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn get_context_pack(&self, id: &str) -> Result<Option<ContextPack>> {
@@ -1842,6 +1879,16 @@ impl Storage {
     pub fn delete_rule(&self, id: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM world_rules WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn delete_project(&self, project_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM document_chunks_fts WHERE project_id = ?1",
+            params![project_id],
+        )?;
+        self.conn
+            .execute("DELETE FROM projects WHERE id = ?1", params![project_id])?;
         Ok(())
     }
 

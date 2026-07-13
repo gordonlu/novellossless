@@ -1,0 +1,59 @@
+[[entry]]
+term = "内阁"
+category = "行政机构"
+dynasty = "明"
+note = "明代核心决策机构"
+
+[[entry]]
+term = "首辅"
+category = "官职"
+dynasty = "明"
+note = "内阁首席"
+
+[[entry]]
+term = "六部"
+category = "行政机构"
+dynasty = "明"
+note = "吏户礼兵刑工"
+
+[[entry]]
+term = "都察院"
+category = "监察机构"
+dynasty = "明"
+note = "最高监察机关"
+
+[[entry]]
+term = "锦衣卫"
+category = "军事机构"
+dynasty = "明"
+note = "皇帝亲军，掌侦缉"
+
+[[entry]]
+term = "东厂"
+category = "监察机构"
+dynasty = "明"
+note = "宦官侦缉机构"
+
+[[entry]]
+term = "巡抚"
+category = "官职"
+dynasty = "明"
+note = "省级临时差遣"
+
+[[entry]]
+term = "总督"
+category = "官职"
+dynasty = "明"
+note = "跨省军事/政务差遣"
+
+[[entry]]
+term = "应天府"
+category = "都城"
+dynasty = "明"
+note = "南京"
+
+[[entry]]
+term = "顺天府"
+category = "都城"
+dynasty = "明"
+note = "北京"

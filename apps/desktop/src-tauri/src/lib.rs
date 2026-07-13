@@ -4,9 +4,10 @@ use std::sync::Mutex;
 use novellossless_core::{
     Dashboard, DocumentTree, NovelCore, PrivacyStatus, ProgressReporter, ScanReport,
 };
+use novellossless_profiles::KnowledgePackLoader;
 use novellossless_storage::{
-    ContextPack, ContinuityIssue, FileScanLog, ForeshadowItem, NarrativeNode, Project,
-    ProjectChunk, ProjectSummary, RevisionRecord, SearchHit, TimelineEvent,
+    ContextPack, ContinuityIssue, FileScanLog, ForeshadowItem, NarrativeNode, NewRevisionTask,
+    Project, ProjectChunk, ProjectSummary, RevisionRecord, ScanRun, SearchHit, TimelineEvent,
 };
 use serde::Serialize;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -241,6 +242,26 @@ struct ScanResultDto {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct BackupInfoDto {
+    path: String,
+    file_name: String,
+    size_bytes: u64,
+    created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanRunDto {
+    id: String,
+    project_id: String,
+    status: String,
+    total_files: i64,
+    scanned_files: i64,
+    created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct FileScanLogDto {
     id: String,
     project_id: String,
@@ -296,6 +317,16 @@ struct RevisionTaskDto {
     notes: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KnowledgePackInfoDto {
+    name: String,
+    pack_type: String,
+    entry_count: usize,
+    dynasties: Vec<String>,
+    source: String,
+}
+
 struct WatcherState(Mutex<Option<crate::watcher::FileWatcher>>);
 
 #[tauri::command]
@@ -315,6 +346,12 @@ fn import_project(app: tauri::AppHandle, name: String, path: String) -> Result<P
 }
 
 #[tauri::command]
+fn delete_project(app: tauri::AppHandle, project_id: String) -> Result<(), String> {
+    let core = open_core(&app)?;
+    core.delete_project(&project_id).map_err(to_command_error)
+}
+
+#[tauri::command]
 fn get_dashboard(app: tauri::AppHandle, project_id: String) -> Result<DashboardDto, String> {
     let core = open_core(&app)?;
     core.dashboard(&project_id)
@@ -323,12 +360,47 @@ fn get_dashboard(app: tauri::AppHandle, project_id: String) -> Result<DashboardD
 }
 
 #[tauri::command]
-fn scan_project(app: tauri::AppHandle, project_id: String) -> Result<ScanReportDto, String> {
+async fn scan_project(app: tauri::AppHandle, project_id: String) -> Result<ScanReportDto, String> {
     let core = open_core(&app)?;
     let progress = TauriProgressReporter { app };
-    core.scan_project_with_progress(&project_id, &progress)
-        .map(ScanReportDto::from)
+    tauri::async_runtime::spawn_blocking(move || {
+        core.scan_project_with_progress(&project_id, &progress)
+    })
+    .await
+    .map_err(|e| format!("扫描线程崩溃：{e}"))?
+    .map(ScanReportDto::from)
+    .map_err(to_command_error)
+}
+
+#[tauri::command]
+fn get_incomplete_scan_run(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<Option<ScanRunDto>, String> {
+    let core = open_core(&app)?;
+    core.get_incomplete_scan_run(&project_id)
         .map_err(to_command_error)
+        .map(|opt| opt.map(ScanRunDto::from))
+}
+
+#[tauri::command]
+async fn resume_scan(app: tauri::AppHandle, project_id: String) -> Result<ScanReportDto, String> {
+    let incomplete = {
+        let core = open_core(&app)?;
+        core.get_incomplete_scan_run(&project_id)
+            .map_err(to_command_error)?
+            .ok_or_else(|| "没有未完成的扫描任务".to_string())?
+    };
+    let core = open_core(&app)?;
+    let reporter = TauriProgressReporter { app };
+    let incomplete_id = incomplete.id.clone();
+    tokio::task::spawn_blocking(move || {
+        core.resume_scan_with_progress(&project_id, &incomplete_id, &reporter)
+    })
+    .await
+    .map_err(|e| format!("扫描线程崩溃：{e}"))?
+    .map(ScanReportDto::from)
+    .map_err(to_command_error)
 }
 
 #[tauri::command]
@@ -374,11 +446,38 @@ fn list_issues(
     app: tauri::AppHandle,
     project_id: String,
     limit: i64,
+    issue_type_prefix: Option<String>,
 ) -> Result<Vec<ContinuityIssueDto>, String> {
     let core = open_core(&app)?;
-    core.list_issues(&project_id, limit)
+    core.list_issues(&project_id, limit, issue_type_prefix.as_deref())
         .map(|items| items.into_iter().map(ContinuityIssueDto::from).collect())
         .map_err(to_command_error)
+}
+
+#[tauri::command]
+fn create_task(
+    app: tauri::AppHandle,
+    project_id: String,
+    title: String,
+    task_type: String,
+    priority: String,
+    source_issue_id: Option<String>,
+    source_foreshadow_id: Option<String>,
+    related_chunks_json: String,
+    notes: String,
+) -> Result<String, String> {
+    let task = NewRevisionTask {
+        project_id,
+        title,
+        task_type,
+        priority,
+        source_issue_id,
+        source_foreshadow_id,
+        related_chunks_json,
+        notes,
+    };
+    let core = open_core(&app)?;
+    core.create_task(&task).map_err(to_command_error)
 }
 
 #[tauri::command]
@@ -435,10 +534,7 @@ fn list_context_packs(
 }
 
 #[tauri::command]
-fn get_context_pack(
-    app: tauri::AppHandle,
-    id: String,
-) -> Result<Option<ContextPackDto>, String> {
+fn get_context_pack(app: tauri::AppHandle, id: String) -> Result<Option<ContextPackDto>, String> {
     let core = open_core(&app)?;
     core.get_context_pack(&id)
         .map(|opt| opt.map(ContextPackDto::from))
@@ -556,6 +652,21 @@ fn get_settings(app: tauri::AppHandle) -> Result<Vec<SettingDto>, String> {
 
 #[tauri::command]
 fn update_setting(app: tauri::AppHandle, key: String, value: String) -> Result<(), String> {
+    if key == "ai_api_key" {
+        // Store API key in OS keychain, not SQLite
+        let stored = novellossless_core::keychain::store_api_key(&value)
+            .map_err(|e| format!("keychain error: {e}"))?;
+        if !stored {
+            // Keychain unavailable — store in SQLite as fallback (with warning)
+            let core = open_core(&app)?;
+            core.update_setting(&key, &value)
+                .map_err(to_command_error)?;
+        }
+        let core = open_core(&app)?;
+        core.update_setting(&key, "stored-via-keyring")
+            .map_err(to_command_error)?;
+        return Ok(());
+    }
     let core = open_core(&app)?;
     core.update_setting(&key, &value).map_err(to_command_error)
 }
@@ -756,18 +867,64 @@ fn watcher_status(app: tauri::AppHandle) -> Result<bool, String> {
 fn backup_database(app: tauri::AppHandle) -> Result<String, String> {
     use std::time::{SystemTime, UNIX_EPOCH};
     let db_path = database_path(&app)?;
+    let core = open_core(&app)?;
+    let backup_dir = backup_directory(&app, &core)?;
+    std::fs::create_dir_all(&backup_dir).map_err(|e| format!("无法创建备份目录：{e}"))?;
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
     let backup_name = format!("novellossless-backup-{ts}.db");
-    let dest = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("无法定位数据目录：{e}"))?
-        .join(&backup_name);
+    let dest = backup_dir.join(&backup_name);
     std::fs::copy(&db_path, &dest).map_err(|e| format!("备份失败：{e}"))?;
     Ok(dest.display().to_string())
+}
+
+#[tauri::command]
+fn list_backups(app: tauri::AppHandle) -> Result<Vec<BackupInfoDto>, String> {
+    let core = open_core(&app)?;
+    let backup_dir = backup_directory(&app, &core)?;
+    let mut backups = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&backup_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("db")
+                && path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map_or(false, |s| s.starts_with("novellossless-backup-"))
+            {
+                let file_name = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                let size_bytes = entry.metadata().ok().map(|m| m.len()).unwrap_or(0);
+                let created_at = entry
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .map(|t| {
+                        let secs = t
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64;
+                        chrono::DateTime::from_timestamp(secs, 0)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_default()
+                    })
+                    .unwrap_or_default();
+                backups.push(BackupInfoDto {
+                    path: path.display().to_string(),
+                    file_name,
+                    size_bytes,
+                    created_at,
+                });
+            }
+        }
+    }
+    backups.sort_by(|a, b| b.file_name.cmp(&a.file_name));
+    Ok(backups)
 }
 
 #[tauri::command]
@@ -805,6 +962,80 @@ fn init_demo_project(app: tauri::AppHandle) -> Result<ProjectDto, String> {
         .map_err(to_command_error)?;
     let _ = core.scan_project(&project.id);
     Ok(ProjectDto::from(project))
+}
+
+#[tauri::command]
+fn list_knowledge_packs(app: tauri::AppHandle) -> Result<Vec<KnowledgePackInfoDto>, String> {
+    let core = open_core(&app)?;
+    let mut result = Vec::new();
+
+    let builtin_packs =
+        KnowledgePackLoader::load_all(core.profiles_root(), "history").unwrap_or_default();
+    for pack in &builtin_packs {
+        let dynasties: Vec<String> = pack.entries.iter().map(|e| e.dynasty.clone()).collect();
+        result.push(KnowledgePackInfoDto {
+            name: pack.pack_name.clone(),
+            pack_type: pack.pack_type.clone(),
+            entry_count: pack.entries.len(),
+            dynasties,
+            source: "builtin".to_string(),
+        });
+    }
+
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法定位数据目录：{e}"))?;
+    let user_dir = app_data_dir.join("knowledge").join("history");
+    let user_packs = KnowledgePackLoader::load_all_from_dir(&user_dir).unwrap_or_default();
+    for pack in &user_packs {
+        let dynasties: Vec<String> = pack.entries.iter().map(|e| e.dynasty.clone()).collect();
+        result.push(KnowledgePackInfoDto {
+            name: pack.pack_name.clone(),
+            pack_type: pack.pack_type.clone(),
+            entry_count: pack.entries.len(),
+            dynasties,
+            source: "user".to_string(),
+        });
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+fn test_ai_connection(app: tauri::AppHandle) -> Result<String, String> {
+    let core = open_core(&app)?;
+    core.test_ai_connection().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn reload_ai_provider(app: tauri::AppHandle) -> Result<(), String> {
+    let core = open_core(&app)?;
+    core.reload_ai_provider();
+    Ok(())
+}
+
+#[tauri::command]
+fn import_knowledge_pack(app: tauri::AppHandle, source_path: String) -> Result<String, String> {
+    let src = PathBuf::from(&source_path);
+    if !src.exists() {
+        return Err("文件不存在".to_string());
+    }
+    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if ext != "toml" {
+        return Err("仅支持 .toml 格式的知识包文件".to_string());
+    }
+    let target_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法定位数据目录：{e}"))?
+        .join("knowledge")
+        .join("history");
+    std::fs::create_dir_all(&target_dir).map_err(|e| format!("无法创建知识目录：{e}"))?;
+    let file_name = src.file_name().ok_or("无效文件名")?;
+    let dest = target_dir.join(file_name);
+    std::fs::copy(&src, &dest).map_err(|e| format!("复制失败：{e}"))?;
+    Ok(format!("已导入知识包：{}", file_name.to_string_lossy()))
 }
 
 fn find_demo_root() -> Result<PathBuf, String> {
@@ -869,8 +1100,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_projects,
             import_project,
+            delete_project,
             get_dashboard,
             scan_project,
+            get_incomplete_scan_run,
+            resume_scan,
             search_project,
             list_candidates,
             list_foreshadows,
@@ -879,6 +1113,7 @@ pub fn run() {
             create_rule,
             delete_rule,
             list_tasks,
+            create_task,
             update_task_status,
             list_timeline_events,
             update_candidate_status,
@@ -905,8 +1140,13 @@ pub fn run() {
             stop_watching,
             watcher_status,
             backup_database,
+            list_backups,
             restore_database,
-            init_demo_project
+            init_demo_project,
+            list_knowledge_packs,
+            import_knowledge_pack,
+            test_ai_connection,
+            reload_ai_provider
         ])
         .run(tauri::generate_context!())
         .expect("failed to run novellossless desktop app");
@@ -977,6 +1217,22 @@ fn database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&app_data)
         .map_err(|error| format!("无法创建应用数据目录 {}：{error}", app_data.display()))?;
     Ok(app_data.join("novellossless.db"))
+}
+
+fn backup_directory(app: &tauri::AppHandle, core: &NovelCore) -> Result<PathBuf, String> {
+    let settings = core.get_settings();
+    if let Some(val) = settings
+        .iter()
+        .find(|(k, _)| k == "backup_path")
+        .map(|(_, v)| v)
+    {
+        if !val.is_empty() {
+            return Ok(PathBuf::from(val));
+        }
+    }
+    app.path()
+        .app_data_dir()
+        .map_err(|e| format!("无法定位数据目录：{e}"))
 }
 
 fn to_command_error(error: impl std::fmt::Display) -> String {
@@ -1131,6 +1387,19 @@ impl From<TimelineEvent> for TimelineEventDto {
             location: e.location,
             is_flashback: e.is_flashback,
             confidence: e.confidence,
+        }
+    }
+}
+
+impl From<ScanRun> for ScanRunDto {
+    fn from(run: ScanRun) -> Self {
+        Self {
+            id: run.id,
+            project_id: run.project_id,
+            status: run.status,
+            total_files: run.total_files,
+            scanned_files: run.scanned_files,
+            created_at: run.started_at,
         }
     }
 }

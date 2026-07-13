@@ -13,6 +13,13 @@ export default {
           "Arial",
           "sans-serif",
         ],
+        display: [
+          "Noto Serif CJK SC",
+          "Source Han Serif SC",
+          "STSongti",
+          "SimSun",
+          "serif",
+        ],
       },
       colors: {
         paper: "#f7f5ef",

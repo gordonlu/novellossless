@@ -1,0 +1,23 @@
+[[metrics]]
+id = "章节平均字数"
+name = "章节平均字数"
+description = "各章节的平均字数分布"
+weight = 1.0
+
+[[metrics]]
+id = "叙事密度"
+name = "叙事密度"
+description = "正文内容词占全文比例"
+weight = 1.0
+
+[[metrics]]
+id = "人物密度"
+name = "人物密度"
+description = "每千字出现的人物名数量"
+weight = 1.0
+
+[[metrics]]
+id = "地名密度"
+name = "地名密度"
+description = "每千字出现的地名数量"
+weight = 1.0

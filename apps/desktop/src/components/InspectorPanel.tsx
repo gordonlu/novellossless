@@ -5,12 +5,14 @@ import { basename, plainSnippet } from "../lib/helpers";
 interface InspectorPanelProps {
   selectedHit: SearchHit | null;
   onRevealSource?: () => void;
+  onCreateTask?: () => void;
+  onDismiss?: () => void;
   issuesCount?: number;
   privacy?: PrivacyStatus;
   profiles?: ProfileManifest[];
 }
 
-export function InspectorPanel({ selectedHit, onRevealSource = () => {}, issuesCount = 0, privacy = { offlineMode: true, aiEnabled: false, uploadsEnabled: false, clipboardAccess: false, screenshotAccess: false, keyboardMonitoring: false, databasePath: "", storageMode: "" }, profiles = [] }: InspectorPanelProps) {
+export function InspectorPanel({ selectedHit, onRevealSource, onCreateTask, onDismiss, issuesCount = 0, privacy = { offlineMode: true, aiEnabled: false, uploadsEnabled: false, clipboardAccess: false, screenshotAccess: false, keyboardMonitoring: false, databasePath: "", storageMode: "" }, profiles = [] }: InspectorPanelProps) {
   return (
     <aside className="inspector">
       <section className="panel evidence-panel">
@@ -44,14 +46,24 @@ export function InspectorPanel({ selectedHit, onRevealSource = () => {}, issuesC
             type="button"
             className="primary-button full"
             disabled={!selectedHit}
-            onClick={onRevealSource}
+            onClick={() => onRevealSource?.()}
           >
             查看来源
           </button>
-          <button type="button" className="secondary-button full" disabled={!selectedHit}>
+          <button
+            type="button"
+            className="secondary-button full"
+            disabled={!selectedHit}
+            onClick={() => onDismiss?.()}
+          >
             标记误报
           </button>
-          <button type="button" className="secondary-button full" disabled={!selectedHit}>
+          <button
+            type="button"
+            className="secondary-button full"
+            disabled={!selectedHit}
+            onClick={() => onCreateTask?.()}
+          >
             创建任务
           </button>
         </div>

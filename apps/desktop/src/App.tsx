@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, BookOpenText, CheckCircle2, Clock3, Database, History, Home, LockKeyhole, Network, RefreshCw, Search, Settings, ShieldCheck, UserRound } from "lucide-react";
+import { AlertTriangle, Archive, BookOpenText, CheckCircle2, Clock3, Database, FileText, History, Home, LockKeyhole, Network, RefreshCw, Search, Settings, ShieldCheck, UserRound } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { clsx } from "clsx";
 import { useEffect, useRef, useState } from "react";
@@ -35,9 +35,10 @@ import {
   updateIssueStatus,
   updateSetting,
 } from "./tauri";
-import { basename, formatError } from "./lib/helpers";
+import { basename, formatError, withTimeout } from "./lib/helpers";
 import { ContentView } from "./routes/ContentView";
 import { ContextPack as ContextPackRoute } from "./routes/ContextPack";
+import { RepeatedDescriptions } from "./routes/RepeatedDescriptions";
 import { Characters } from "./routes/Characters";
 import { Dashboard as DashboardRoute } from "./routes/Dashboard";
 import { Foreshadows } from "./routes/Foreshadows";
@@ -46,6 +47,7 @@ import { Privacy } from "./routes/Privacy";
 import { RevisionHistory } from "./routes/RevisionHistory";
 import { SearchView } from "./routes/SearchView";
 import { Settings as SettingsRoute } from "./routes/Settings";
+import { ProfileDetail } from "./routes/ProfileDetail";
 import { Timeline } from "./routes/Timeline";
 
 const demoProject: Project = {
@@ -64,6 +66,7 @@ const navigation = [
   { label: "伏笔", icon: Network, path: "/foreshadows" },
   { label: "时间线", icon: Clock3, path: "/timeline" },
   { label: "冲突报告", icon: AlertTriangle, path: "/issues" },
+  { label: "重复描写", icon: FileText, path: "/repeated" },
   { label: "改稿历史", icon: History, path: "/history" },
   { label: "上下文包", icon: Archive, path: "/context-pack" },
   { label: "隐私中心", icon: LockKeyhole, path: "/privacy" },
@@ -169,6 +172,10 @@ const previewProfiles: ProfileManifest[] = [
 type BusyState = "idle" | "loading" | "import" | "scan" | "search" | "context" | "report";
 type RuntimeMode = "desktop" | "preview";
 
+export function applyTheme(theme: string) {
+  document.documentElement.setAttribute("data-theme", theme === "light" ? "light" : "dark");
+}
+
 export function App() {
   const location = useLocation();
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(
@@ -260,9 +267,15 @@ export function App() {
   const scanReady = hasRealProject;
 
   async function loadGlobalP0() {
-    const [privacyStatus, profileItems] = await Promise.all([getPrivacyStatus(), getAvailableProfiles()]);
+    const [privacyStatus, profileItems, settings] = await Promise.all([
+      getPrivacyStatus(),
+      getAvailableProfiles(),
+      getSettings().catch(() => [] as Setting[]),
+    ]);
     setPrivacy(privacyStatus);
     setProfiles(profileItems);
+    const themeVal = settings.find((s) => s.key === "theme")?.value || "dark";
+    applyTheme(themeVal);
   }
 
   async function loadProjectP0(projectId: string) {
@@ -366,9 +379,27 @@ export function App() {
     }
   }
 
-  async function handleImport() {
+  async function chooseFile() {
+    setError("");
+    if (runtimeMode === "preview") {
+      setError("浏览器预览不能打开系统文件选择器。请在桌面应用中选择文件。");
+      return;
+    }
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "小说文件", extensions: ["txt", "md", "markdown", "docx"] }],
+    });
+    if (typeof selected === "string") {
+      setFolderPath(selected);
+      if (!projectName) {
+        setProjectName(basename(selected) || "新小说项目");
+      }
+    }
+  }
+
+  async function handleImportAndScan() {
     if (!folderPath.trim()) {
-      setError("请先选择小说项目目录。");
+      setError("请先选择小说目录或文件。");
       return;
     }
     setBusy("import");
@@ -377,11 +408,22 @@ export function App() {
       const project = await importProject(projectName.trim() || "新小说项目", folderPath.trim());
       setSelectedProject(project);
       setProjects((items) => [project, ...items.filter((item) => item.id !== project.id)]);
+      setFolderPath("");
       setContextPack(null);
-      await loadProjectP0(project.id);
-      setNotice("项目已导入，可以开始本地扫描。");
+      const report = await withTimeout(scanProject(project.id), 600_000);
+      setLastScan(report);
+      setDashboard({
+        summary: report.summary,
+        personCandidates: report.analysis.personCandidates,
+        placeCandidates: report.analysis.placeCandidates,
+        itemCandidates: report.analysis.itemCandidates,
+        foreshadowCandidates: report.analysis.foreshadowCandidates,
+        issueCount: report.analysis.issueCount,
+      });
+      await loadProjectLists(project.id);
     } catch (reason) {
       setError(formatError(reason));
+      setScanProgress(null);
     } finally {
       setBusy("idle");
     }
@@ -395,7 +437,7 @@ export function App() {
     setBusy("scan");
     setError("");
     try {
-      const report = await scanProject(selectedProject.id);
+      const report = await withTimeout(scanProject(selectedProject.id), 600_000);
       setLastScan(report);
       setDashboard({
         summary: report.summary,
@@ -411,9 +453,9 @@ export function App() {
       );
     } catch (reason) {
       setError(formatError(reason));
+      setScanProgress(null);
     } finally {
       setBusy("idle");
-      setScanProgress(null);
     }
   }
 
@@ -620,6 +662,7 @@ export function App() {
             path="/"
             element={
               <DashboardRoute
+                projectId={selectedProject.id}
                 projectName={projectName}
                 setProjectName={setProjectName}
                 folderPath={folderPath}
@@ -637,7 +680,8 @@ export function App() {
                 privacy={privacy}
                 profiles={profiles}
                 chooseFolder={chooseFolder}
-                handleImport={handleImport}
+                chooseFile={chooseFile}
+                handleImport={handleImportAndScan}
                 handleScan={handleScan}
                 handleBuildContextPack={handleBuildContextPack}
                 handleGenerateReport={handleGenerateReport}
@@ -651,6 +695,7 @@ export function App() {
           <Route path="/foreshadows" element={<Foreshadows projectId={selectedProject.id} />} />
           <Route path="/timeline" element={<Timeline projectId={selectedProject.id} />} />
           <Route path="/issues" element={<Issues projectId={selectedProject.id} />} />
+          <Route path="/repeated" element={<RepeatedDescriptions projectId={selectedProject.id} />} />
           <Route path="/history" element={<RevisionHistory projectId={selectedProject.id} />} />
           <Route path="/context-pack" element={<ContextPackRoute projectId={selectedProject.id} />} />
           <Route
@@ -660,6 +705,10 @@ export function App() {
           <Route
             path="/settings"
             element={<SettingsRoute privacy={privacy} projectId={selectedProject.id} />}
+          />
+          <Route
+            path="/profiles/:profileId"
+            element={<ProfileDetail projectId={selectedProject.id} />}
           />
         </Routes>
       </main>

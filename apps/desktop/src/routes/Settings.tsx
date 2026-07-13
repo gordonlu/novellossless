@@ -1,7 +1,10 @@
-import { Check, Download, RefreshCw, Shield, Upload } from "lucide-react";
+import { Download, ExternalLink, Trash2, Upload } from "lucide-react";
 import { clsx } from "clsx";
 import { useEffect, useState } from "react";
-import { backupDatabase, getAvailableProfiles, getEnabledProfiles, getSettings, PrivacyStatus, ProfileManifest, restoreDatabase, setEnabledProfiles, updateSetting } from "../tauri";
+import { Link } from "react-router-dom";
+import { open } from "@tauri-apps/plugin-dialog";
+import { applyTheme } from "../App";
+import { backupDatabase, BackupInfo, deleteProject, getAvailableProfiles, getEnabledProfiles, getSettings, listBackups, PrivacyStatus, ProfileManifest, restoreDatabase, setEnabledProfiles, updateSetting, testAiConnection, reloadAiProvider } from "../tauri";
 
 interface Props {
   privacy: PrivacyStatus;
@@ -44,6 +47,15 @@ export function Settings({ privacy, projectId }: Props) {
   const [profiles, setProfiles] = useState<ProfileManifest[]>([]);
   const [enabledIds, setEnabledIds] = useState<string[]>([]);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState("");
+  const [aiTesting, setAiTesting] = useState(false);
+  const [hasStoredKey, setHasStoredKey] = useState(false);
+
+  useEffect(() => {
+    if (entries["ai_api_key"]?.value === "stored-via-keyring") {
+      setHasStoredKey(true);
+    }
+  }, [entries]);
 
   useEffect(() => {
     (async () => {
@@ -81,6 +93,9 @@ export function Settings({ privacy, projectId }: Props) {
         ...prev,
         [key]: { key, value: newValue, dirty: false },
       }));
+      if (key === "ai_enabled" && newValue === "true") {
+        await reloadAiProvider();
+      }
     } catch (reason) {
       setMessage(`保存失败：${reason}`);
     } finally {
@@ -129,6 +144,7 @@ export function Settings({ privacy, projectId }: Props) {
                 setSaving("theme");
                 try {
                   await updateSetting("theme", v);
+                  applyTheme(v);
                   setEntries((prev) => ({
                     ...prev,
                     theme: { key: "theme", value: v, dirty: false },
@@ -212,6 +228,121 @@ export function Settings({ privacy, projectId }: Props) {
       </section>
 
       <section className="settings-section">
+        <h3 className="settings-section-title">AI 配置</h3>
+
+        <div className="notice notice-block" style={{ marginBottom: 16 }}>
+          <strong>数据隐私提醒：</strong>
+          启用 AI 后，正文片段将通过你指定的 API 发送到外部服务（每次仅限 8000 字以内的相关片段，不会发送整本书）。
+          OpenAI / DeepSeek / Anthropic 等<strong>纯 API</strong> 不会用你的数据训练模型。
+          但<strong>Coding Plan（订阅制）</strong>服务会记录和分析对话内容用于产品改进，与纯 API 计费不同。
+          如需确保数据绝对不离开本机，建议使用本地模型（
+          <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>、
+          <a href="https://lmstudio.ai" target="_blank" rel="noopener">LM Studio</a>）。
+        </div>
+
+        <div className="settings-row">
+          <div>
+            <label>API 地址</label>
+            <p className="settings-desc">
+              本地模型填 <code>http://localhost:11434</code>，商业 API 填对应地址
+            </p>
+          </div>
+          <div className="settings-control">
+            <input
+              className="settings-input"
+              value={entries["ai_provider"]?.value || ""}
+              placeholder="https://api.openai.com"
+              onChange={async (e) => {
+                const v = e.target.value;
+                await updateSetting("ai_provider", v);
+                setEntries((prev) => ({
+                  ...prev,
+                  ai_provider: { key: "ai_provider", value: v, dirty: false },
+                }));
+                await reloadAiProvider();
+              }}
+            />
+          </div>
+        </div>
+        <div className="settings-row">
+          <div>
+            <label>API Key</label>
+            <p className="settings-desc">API 密钥（存入系统密钥链，不落盘）。本地模型不需要</p>
+          </div>
+          <div className="settings-control">
+            <input
+              className="settings-input"
+              type="password"
+              value={hasStoredKey ? "" : (entries["ai_api_key"]?.value || "")}
+              placeholder={hasStoredKey ? "••••••••（已存入系统密钥链）" : "sk-...（留空则不用 key）"}
+              onChange={async (e) => {
+                const v = e.target.value;
+                if (!v) return;
+                await updateSetting("ai_api_key", v);
+                setEntries((prev) => ({
+                  ...prev,
+                  ai_api_key: { key: "ai_api_key", value: "stored-via-keyring", dirty: false },
+                }));
+                setHasStoredKey(true);
+                await reloadAiProvider();
+              }}
+            />
+          </div>
+        </div>
+        <div className="settings-row">
+          <div>
+            <label>模型</label>
+            <p className="settings-desc">
+              本地用 <code>qwen2.5:7b</code> / <code>llama3.2:3b</code>，商业用 <code>gpt-4o-mini</code> / <code>deepseek-chat</code>
+            </p>
+          </div>
+          <div className="settings-control">
+            <input
+              className="settings-input"
+              value={entries["ai_model"]?.value || ""}
+              placeholder="gpt-4o-mini"
+              onChange={async (e) => {
+                const v = e.target.value;
+                await updateSetting("ai_model", v);
+                setEntries((prev) => ({
+                  ...prev,
+                  ai_model: { key: "ai_model", value: v, dirty: false },
+                }));
+                await reloadAiProvider();
+              }}
+            />
+          </div>
+        </div>
+        <div className="settings-row">
+          <div>
+            <label>连接测试</label>
+            <p className="settings-desc">{aiTestResult || "测试 AI API 是否可达"}</p>
+          </div>
+          <div className="settings-control">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={async () => {
+                setAiTesting(true);
+                setAiTestResult("测试中…");
+                try {
+                  const result = await testAiConnection();
+                  setAiTestResult(result);
+                } catch (e) {
+                  setAiTestResult(`失败：${e}`);
+                } finally {
+                  setAiTesting(false);
+                }
+              }}
+              disabled={aiTesting}
+            >
+              测试连接
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="settings-section">
         <h3 className="settings-section-title">备份</h3>
         <div className="settings-row">
           <div>
@@ -250,19 +381,15 @@ export function Settings({ privacy, projectId }: Props) {
             onClick={async () => {
               setMessage("");
               try {
-                const input = document.createElement("input");
-                input.type = "file";
-                input.accept = ".db";
-                input.onchange = async () => {
-                  const file = input.files?.[0];
-                  if (!file) return;
-                  const path = (file as any).path;
-                  if (path) {
-                    await restoreDatabase(path);
-                    setMessage("数据库已恢复。请重启应用。");
-                  }
-                };
-                input.click();
+                const selected = await open({
+                  filters: [{ name: "Database", extensions: ["db"] }],
+                  multiple: false,
+                  directory: false,
+                });
+                if (selected) {
+                  await restoreDatabase(selected);
+                  setMessage("数据库已恢复。请重启应用。");
+                }
               } catch (e) {
                 setMessage(`恢复失败：${e}`);
               }
@@ -272,7 +399,33 @@ export function Settings({ privacy, projectId }: Props) {
             恢复备份
           </button>
         </div>
+        <BackupList />
       </section>
+
+      {projectId && (
+        <section className="settings-section">
+          <h3 className="settings-section-title">项目管理</h3>
+          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={async () => {
+                if (!confirm("确定要删除此项目及其所有数据？此操作不可撤销。")) return;
+                try {
+                  await deleteProject(projectId);
+                  setMessage("项目已删除。");
+                  setTimeout(() => window.location.reload(), 1000);
+                } catch (e) {
+                  setMessage(`删除失败：${e}`);
+                }
+              }}
+            >
+              <Trash2 size={14} style={{ marginRight: 4 }} />
+              删除此项目
+            </button>
+          </div>
+        </section>
+      )}
 
       {profiles.length > 0 && (
         <section className="settings-section">
@@ -280,7 +433,10 @@ export function Settings({ privacy, projectId }: Props) {
           {profiles.map((p) => (
             <div className="settings-row" key={p.id}>
               <div>
-                <label>{p.name}</label>
+                <Link to={`/profiles/${p.id}`} style={{ display: "flex", alignItems: "center", gap: 6, textDecoration: "none", color: "inherit" }}>
+                  <label style={{ cursor: "pointer" }}>{p.name}</label>
+                  <ExternalLink size={12} style={{ color: "var(--text-muted)" }} />
+                </Link>
                 <p className="settings-desc">{p.description}</p>
               </div>
               <button
@@ -308,6 +464,45 @@ export function Settings({ privacy, projectId }: Props) {
           ))}
         </section>
       )}
+    </div>
+  );
+}
+
+function BackupList() {
+  const [backups, setBackups] = useState<BackupInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const list = await listBackups();
+        setBackups(list);
+      } catch {
+        // preview mode
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  if (loading) return null;
+  if (backups.length === 0) return <p className="settings-desc" style={{ marginTop: 8 }}>尚无备份文件。</p>;
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <p className="settings-desc" style={{ marginBottom: 6 }}>已有备份：</p>
+      {backups.map((b) => (
+        <div key={b.path} className="settings-row" style={{ padding: "6px 0" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              {b.fileName}
+            </span>
+            <span style={{ fontSize: 11, marginLeft: 8, color: "var(--text-muted)" }}>
+              {(b.sizeBytes / 1024).toFixed(0)} KB · {b.createdAt.slice(0, 19).replace("T", " ")}
+            </span>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

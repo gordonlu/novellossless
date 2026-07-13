@@ -64,12 +64,16 @@ pub struct KnowledgePackLoader;
 impl KnowledgePackLoader {
     pub fn load_all(profiles_root: &Path, profile_id: &str) -> Result<Vec<KnowledgePackEntry>> {
         let knowledge_dir = profiles_root.join(profile_id).join("knowledge");
+        Self::load_all_from_dir(&knowledge_dir)
+    }
+
+    pub fn load_all_from_dir(knowledge_dir: &Path) -> Result<Vec<KnowledgePackEntry>> {
         if !knowledge_dir.exists() {
             return Ok(Vec::new());
         }
 
         let mut packs = Vec::new();
-        let read_dir = std::fs::read_dir(&knowledge_dir)
+        let read_dir = std::fs::read_dir(knowledge_dir)
             .with_context(|| format!("failed to read {}", knowledge_dir.display()))?;
 
         for entry in read_dir {

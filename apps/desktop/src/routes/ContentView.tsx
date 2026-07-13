@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react";
-import { BookOpenText, ChevronRight } from "lucide-react";
+import { useLocation } from "react-router-dom";
+import { BookOpenText, ChevronRight, FileText } from "lucide-react";
 import { getDocumentChunks, DocumentInfo, ChunkInfo } from "../tauri";
+import { basename } from "../lib/helpers";
 
 interface Props {
   projectId: string;
 }
 
 export function ContentView({ projectId }: Props) {
+  const location = useLocation();
+  const revealState = location.state as { revealDocId?: string; revealChunkId?: string } | null;
   const [documents, setDocuments] = useState<DocumentInfo[]>([]);
   const [selectedDoc, setSelectedDoc] = useState<string | null>(null);
   const [chunks, setChunks] = useState<ChunkInfo[]>([]);
@@ -17,6 +21,12 @@ export function ContentView({ projectId }: Props) {
       getDocumentChunks(projectId).then((tree) => {
         setDocuments(tree.documents);
         setChunks(tree.chunks);
+        if (revealState?.revealDocId) {
+          setSelectedDoc(revealState.revealDocId);
+          const chunk = tree.chunks.find((c) => c.id === revealState.revealChunkId);
+          if (chunk) setSelectedChunk(chunk);
+          window.history.replaceState(null, "");
+        }
       });
     }
   }, [projectId]);
@@ -37,8 +47,8 @@ export function ContentView({ projectId }: Props) {
                 className={`doc-item ${selectedDoc === doc.id ? "doc-item-active" : ""}`}
                 onClick={() => setSelectedDoc(doc.id)}
               >
-                <BookOpenText size={16} />
-                <span>{doc.title}</span>
+                <FileText size={16} />
+                <span>{doc.title || basename(doc.path)}</span>
                 <small>{doc.chapterCount} 章</small>
               </button>
             ))}

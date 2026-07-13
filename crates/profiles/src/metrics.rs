@@ -19,6 +19,8 @@ pub enum MetricKind {
     KeywordInterval(Vec<String>),
     ModernWordDensity(Vec<String>),
     FaceSlapIntensity(Vec<(String, f64)>),
+    ChapterAvgWords,
+    EntityDensity(Vec<String>),
     PacingFlatness {
         window: usize,
         event_keywords: Vec<String>,
@@ -68,6 +70,8 @@ impl MetricRegistry {
                 | MetricKind::ModernWordDensity(_)
                 | MetricKind::FaceSlapIntensity(_) => "per_1000_chars",
                 MetricKind::KeywordInterval(_) => "chapters",
+                MetricKind::ChapterAvgWords => "chars",
+                MetricKind::EntityDensity(_) => "per_1000_chars",
                 MetricKind::PacingFlatness { .. } => "ratio",
             };
             results.push(MetricResult {
@@ -178,12 +182,45 @@ pub(crate) fn metric_kind_for(metric_type: &str) -> MetricKind {
                 "侮辱".into(),
             ],
         },
+        "章节平均字数" => MetricKind::ChapterAvgWords,
+        "人物密度" => MetricKind::EntityDensity(
+            // Common Chinese character name patterns - can't know them ahead of scan
+            // so we keep an empty list; the real extraction happens via the core candidate system.
+            // This metric uses candidate data from the project, not chunk keyword matching.
+            Vec::new(),
+        ),
+        "地名密度" => MetricKind::EntityDensity(Vec::new()),
+        "叙事密度" => MetricKind::KeywordDensity(Vec::new()), // ratio of narrative vs dialogue, placeholder
         _ => MetricKind::KeywordDensity(Vec::new()),
     }
 }
 
 pub(crate) fn compute_metric(mdef: &MetricDefinition, chunks: &[&str]) -> f64 {
     match &mdef.kind {
+        MetricKind::ChapterAvgWords => {
+            if chunks.is_empty() {
+                return 0.0;
+            }
+            let total: usize = chunks.iter().map(|c| c.chars().count()).sum();
+            total as f64 / chunks.len() as f64
+        }
+        MetricKind::EntityDensity(keywords) => {
+            if chunks.is_empty() {
+                return 0.0;
+            }
+            let total_chars: usize = chunks.iter().map(|c| c.chars().count()).sum();
+            if total_chars == 0 {
+                return 0.0;
+            }
+            if keywords.is_empty() {
+                return 0.0; // needs project-level candidate data
+            }
+            let total_matches: usize = chunks
+                .iter()
+                .flat_map(|c| keywords.iter().filter(|kw| c.contains(kw.as_str())))
+                .count();
+            (total_matches as f64 / total_chars as f64) * 1000.0 * mdef.weight
+        }
         MetricKind::KeywordDensity(keywords) | MetricKind::ModernWordDensity(keywords) => {
             if keywords.is_empty() || chunks.is_empty() {
                 return 0.0;

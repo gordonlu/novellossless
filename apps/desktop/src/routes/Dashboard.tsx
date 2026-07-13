@@ -10,7 +10,7 @@ import {
   Search,
   UserRound,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { InspectorPanel } from "../components/InspectorPanel";
 import { StatusButtons } from "../components/StatusButtons";
 import {
@@ -28,12 +28,24 @@ import type {
   NarrativeNode,
   PrivacyStatus,
   ProfileManifest,
+  ProfileMetric,
   ScanReport,
+  ScanRun,
+} from "../tauri";
+import { withTimeout } from "../lib/helpers";
+import {
+  getAvailableProfiles,
+  getDashboard,
+  getEnabledProfiles,
+  getIncompleteScanRun,
+  getProfileMetrics,
+  resumeScan,
 } from "../tauri";
 
 type BusyState = "idle" | "loading" | "import" | "scan" | "search" | "context" | "report";
 
 interface DashboardProps {
+  projectId: string;
   projectName: string;
   setProjectName: (name: string) => void;
   folderPath: string;
@@ -51,6 +63,7 @@ interface DashboardProps {
   privacy: PrivacyStatus;
   profiles: ProfileManifest[];
   chooseFolder: () => void;
+  chooseFile: () => void;
   handleImport: () => void;
   handleScan: () => void;
   handleBuildContextPack: (query: string) => void;
@@ -60,6 +73,7 @@ interface DashboardProps {
 
 export function Dashboard(props: DashboardProps) {
   const {
+    projectId,
     projectName,
     setProjectName,
     folderPath,
@@ -77,6 +91,7 @@ export function Dashboard(props: DashboardProps) {
     privacy,
     profiles,
     chooseFolder,
+    chooseFile,
     handleImport,
     handleScan,
     handleBuildContextPack,
@@ -85,6 +100,21 @@ export function Dashboard(props: DashboardProps) {
   } = props;
 
   const [contextQuery, setContextQuery] = useState("");
+  const [message, setMessage] = useState("");
+  const [recoveryRun, setRecoveryRun] = useState<ScanRun | null>(null);
+  const [recovering, setRecovering] = useState(false);
+
+  useEffect(() => {
+    if (!projectId) return;
+    (async () => {
+      try {
+        const run = await getIncompleteScanRun(projectId);
+        if (run) setRecoveryRun(run);
+      } catch {
+        // ignore in preview mode
+      }
+    })();
+  }, [projectId]);
 
   const metrics = useMemo(
     () => [
@@ -104,8 +134,8 @@ export function Dashboard(props: DashboardProps) {
         <section className="panel import-panel">
           <div className="panel-heading">
             <div>
-              <h2>项目导入与扫描</h2>
-              <p>选择小说目录后，novellossless 只扫描该目录内的 TXT 和 Markdown。</p>
+              <h2>导入项目</h2>
+              <p>选择目录后一键导入并扫描，已有项目可重新扫描。</p>
             </div>
             <FolderOpen size={22} />
           </div>
@@ -129,7 +159,11 @@ export function Dashboard(props: DashboardProps) {
                 />
                 <button type="button" className="secondary-button" onClick={chooseFolder}>
                   <FolderOpen size={16} />
-                  浏览
+                  浏览目录
+                </button>
+                <button type="button" className="secondary-button" onClick={chooseFile}>
+                  <FolderOpen size={16} />
+                  选择文件
                 </button>
               </div>
             </label>
@@ -143,7 +177,7 @@ export function Dashboard(props: DashboardProps) {
               disabled={busy !== "idle" || runtimeMode === "preview"}
             >
               <Plus size={16} />
-              {busy === "import" ? "正在导入" : "导入项目"}
+              {busy === "import" ? "正在导入并扫描…" : "导入并扫描"}
             </button>
             <button
               type="button"
@@ -175,6 +209,12 @@ export function Dashboard(props: DashboardProps) {
           )}
         </section>
 
+        {message && (
+          <div className="notice" style={{ marginBottom: 8 }}>
+            <span>{message}</span>
+          </div>
+        )}
+
         <section className="metric-grid six">
           {metrics.map((metric) => (
             <div className="metric-card" key={metric.label}>
@@ -186,6 +226,41 @@ export function Dashboard(props: DashboardProps) {
             </div>
           ))}
         </section>
+
+        {recoveryRun && (
+          <div className="panel" style={{ padding: 16, marginBottom: 16, borderLeft: "4px solid var(--accent)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <strong>上次扫描未完成</strong>
+                <p className="settings-desc" style={{ marginTop: 4 }}>
+                  第 {recoveryRun.scannedFiles}/{recoveryRun.totalFiles} 个文件时中断
+                </p>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={async () => {
+                      setRecovering(true);
+                      try {
+                        await withTimeout(resumeScan(projectId), 600_000);
+                        setMessage("扫描已恢复完成。");
+                        setRecoveryRun(null);
+                      } catch (e) {
+                        setMessage(`恢复失败：${e}`);
+                      } finally {
+                        setRecovering(false);
+                      }
+                    }}
+                    disabled={recovering}
+                  >
+                    <RefreshCw size={14} style={{ marginRight: 4 }} />
+                    恢复扫描
+                  </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <section className="p0-grid">
           <section className="panel p0-panel">
@@ -310,6 +385,8 @@ export function Dashboard(props: DashboardProps) {
             {contextPack && <pre className="context-preview">{contextPack.content}</pre>}
           </section>
         </section>
+
+        <ProfileMetrics projectId={projectId} />
       </div>
 
       <InspectorPanel
@@ -318,6 +395,59 @@ export function Dashboard(props: DashboardProps) {
         privacy={privacy}
         profiles={profiles}
       />
+    </section>
+  );
+}
+
+function ProfileMetrics({ projectId }: { projectId: string }) {
+  const [metricsByProfile, setMetricsByProfile] = useState<Record<string, ProfileMetric[]>>({});
+  const [profiles, setProfiles] = useState<ProfileManifest[]>([]);
+  const [enabledIds, setEnabledIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    (async () => {
+      try {
+        const all = await getAvailableProfiles();
+        setProfiles(all);
+        const enabled = await getEnabledProfiles(projectId);
+        setEnabledIds(enabled);
+        const map: Record<string, ProfileMetric[]> = {};
+        for (const pid of enabled) {
+          try {
+            map[pid] = await getProfileMetrics(projectId, pid);
+          } catch { /* ok */ }
+        }
+        setMetricsByProfile(map);
+      } catch { /* preview */ }
+    })();
+  }, [projectId]);
+
+  const enabledProfiles = profiles.filter((p) => enabledIds.includes(p.id));
+  if (enabledProfiles.length === 0) return null;
+
+  return (
+    <section className="settings-section">
+      <h3 className="settings-section-title">创作指标</h3>
+      {enabledProfiles.map((p) => {
+        const metrics = metricsByProfile[p.id] || [];
+        return (
+          <div key={p.id} style={{ marginTop: 12 }}>
+            <h4 style={{ fontSize: 13, fontWeight: 650, marginBottom: 8 }}>{p.name}</h4>
+            <div className="metric-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))" }}>
+              {metrics.map((m) => (
+                <div key={m.id} className="metric-card" style={{ padding: "10px 12px" }}>
+                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{m.metricType}</span>
+                  <strong style={{ fontSize: 18, fontWeight: 700, marginTop: 4, display: "block", fontVariantNumeric: "tabular-nums" }}>{m.value}</strong>
+                </div>
+              ))}
+              {metrics.length === 0 && (
+                <p className="settings-desc" style={{ fontSize: 12 }}>尚无指标数据，完成扫描后显示。</p>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </section>
   );
 }

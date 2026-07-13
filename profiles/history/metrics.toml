@@ -1,0 +1,11 @@
+[[metrics]]
+id = "知识密度"
+name = "知识密度"
+description = "每千字中历史专用词汇（官职、地名、年号等）的出现次数"
+weight = 1.0
+
+[[metrics]]
+id = "时代穿帮风险"
+name = "时代穿帮风险"
+description = "每千字中现代词汇的出现次数（越高风险越大）"
+weight = 1.5

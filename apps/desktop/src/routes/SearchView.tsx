@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ChevronRight, FileSearch, Search } from "lucide-react";
-import { searchProject, SearchHit } from "../tauri";
+import { createTask, searchProject, SearchHit } from "../tauri";
 import { InspectorPanel } from "../components/InspectorPanel";
 
 interface Props {
@@ -8,6 +9,7 @@ interface Props {
 }
 
 export function SearchView({ projectId }: Props) {
+  const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [selected, setSelected] = useState<SearchHit | null>(null);
@@ -27,6 +29,24 @@ export function SearchView({ projectId }: Props) {
       setLoading(false);
     }
   }
+
+  const handleRevealSource = () => {
+    if (!selected) return;
+    navigate("/content", { state: { revealDocId: selected.documentId, revealChunkId: selected.chunkId } });
+  };
+
+  const handleCreateTask = async () => {
+    if (!selected) return;
+    try {
+      const title = `跟进：${selected.title}`;
+      const relatedChunks = JSON.stringify([selected.chunkId]);
+      const notes = `来源：${selected.documentPath}\n摘要：${selected.snippet}`;
+      await createTask(projectId, title, "followup", "medium", relatedChunks, notes);
+      alert("任务已创建。");
+    } catch {
+      alert("创建任务失败。");
+    }
+  };
 
   return (
     <section className="content-grid">
@@ -75,7 +95,12 @@ export function SearchView({ projectId }: Props) {
         </section>
       </div>
       <aside className="inspector">
-        <InspectorPanel selectedHit={selected} />
+        <InspectorPanel
+          selectedHit={selected}
+          onRevealSource={handleRevealSource}
+          onCreateTask={handleCreateTask}
+          onDismiss={() => setSelected(null)}
+        />
       </aside>
     </section>
   );

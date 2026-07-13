@@ -212,9 +212,9 @@ export function listForeshadows(projectId: string, limit = 20) {
   return invoke<ForeshadowItem[]>("list_foreshadows", { projectId, limit });
 }
 
-export function listIssues(projectId: string, limit = 20) {
+export function listIssues(projectId: string, limit = 20, issueTypePrefix?: string) {
   ensureDesktopRuntime();
-  return invoke<ContinuityIssue[]>("list_issues", { projectId, limit });
+  return invoke<ContinuityIssue[]>("list_issues", { projectId, limit, issueTypePrefix });
 }
 
 export function updateCandidateStatus(id: string, status: string) {
@@ -375,6 +375,22 @@ export function watcherStatus() {
   return invoke<boolean>("watcher_status");
 }
 
+export interface BackupInfo {
+  path: string;
+  fileName: string;
+  sizeBytes: number;
+  createdAt: string;
+}
+
+export interface ScanRun {
+  id: string;
+  projectId: string;
+  status: string;
+  totalFiles: number;
+  scannedFiles: number;
+  createdAt: string;
+}
+
 export interface Setting {
   key: string;
   value: string;
@@ -403,4 +419,71 @@ export function restoreDatabase(sourcePath: string) {
 export function initDemoProject() {
   ensureDesktopRuntime();
   return invoke<Project>("init_demo_project");
+}
+
+export function listBackups() {
+  ensureDesktopRuntime();
+  return invoke<BackupInfo[]>("list_backups");
+}
+
+export function deleteProject(projectId: string) {
+  ensureDesktopRuntime();
+  return invoke<void>("delete_project", { projectId });
+}
+
+export function getIncompleteScanRun(projectId: string) {
+  ensureDesktopRuntime();
+  return invoke<ScanRun | null>("get_incomplete_scan_run", { projectId });
+}
+
+export function resumeScan(projectId: string) {
+  ensureDesktopRuntime();
+  return invoke<ScanReport>("resume_scan", { projectId });
+}
+
+export interface KnowledgePackInfo {
+  name: string;
+  packType: string;
+  entryCount: number;
+  dynasties: string[];
+  source: string;
+}
+
+export function listKnowledgePacks() {
+  ensureDesktopRuntime();
+  return invoke<KnowledgePackInfo[]>("list_knowledge_packs");
+}
+
+export function importKnowledgePack(sourcePath: string) {
+  ensureDesktopRuntime();
+  return invoke<string>("import_knowledge_pack", { sourcePath });
+}
+
+export function testAiConnection() {
+  ensureDesktopRuntime();
+  return invoke<string>("test_ai_connection");
+}
+
+export function reloadAiProvider() {
+  ensureDesktopRuntime();
+  return invoke("reload_ai_provider");
+}
+
+export function createTask(
+  projectId: string,
+  title: string,
+  taskType: string,
+  priority: string,
+  relatedChunksJson: string,
+  notes: string,
+) {
+  ensureDesktopRuntime();
+  return invoke<string>("create_task", {
+    projectId,
+    title,
+    taskType,
+    priority,
+    relatedChunksJson,
+    notes,
+  });
 }

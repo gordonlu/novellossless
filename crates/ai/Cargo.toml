@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 anyhow.workspace = true
 deeplossless = { workspace = true, optional = true }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

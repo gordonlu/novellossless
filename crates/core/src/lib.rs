@@ -1,9 +1,11 @@
 mod analysis;
+pub mod keychain;
 mod profile;
 mod scan;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::analysis::extractor::{ChunkInfo, Extraction, Extractor};
 use crate::analysis::{
@@ -11,18 +13,19 @@ use crate::analysis::{
     RepeatExpressionExtractor,
 };
 use crate::profile::{
-    ExtractorRules, IssueEmitter, KnowledgePackIndex, KnowledgePackLoader, MetricRegistry,
-    PeopleConfig, ProfileLoader, ProfileManifest, ProfileRules,
+    ExtractorRules, IssueEmitter, KnowledgePackEntry, KnowledgePackIndex, KnowledgePackLoader,
+    MetricRegistry, PeopleConfig, ProfileLoader, ProfileManifest, ProfileRules,
 };
 
 use anyhow::{Context, Result};
-use novellossless_parser::parse_document;
+use novellossless_parser::{Chapter as ParserChapter, parse_document};
 use novellossless_repeated::{ChunkInfo as RepeatedChunkInfo, RepeatedDescriptionEngine};
 use novellossless_storage::{
     ContextPack, ContinuityIssue, ForeshadowItem, NarrativeNode, NewChunk, NewContinuityIssue,
-    NewDocument, NewForeshadowItem, NewNarrativeNode, NewProfileMetric, NewScanRun, Project,
-    ProjectChunk, ProjectSummary, RevisionTask, ScanRun, SearchHit, Storage,
+    NewDocument, NewForeshadowItem, NewNarrativeNode, NewProfileMetric, NewRevisionTask,
+    NewScanRun, Project, ProjectChunk, ProjectSummary, RevisionTask, ScanRun, SearchHit, Storage,
 };
+use rayon::prelude::*;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
@@ -30,11 +33,12 @@ use walkdir::WalkDir;
 pub struct NovelCore {
     pub(crate) storage: Storage,
     profiles_root: PathBuf,
+    user_knowledge_base: Option<PathBuf>,
     profile_manifests: Vec<ProfileManifest>,
     extractor_rules: ExtractorRules,
     people_config: PeopleConfig,
     default_rules: ProfileRules,
-    ai_provider: Box<dyn novellossless_ai::AiProvider>,
+    ai_provider: Mutex<Box<dyn novellossless_ai::AiProvider>>,
 }
 
 pub trait ProgressReporter {
@@ -123,6 +127,59 @@ pub struct DocumentTree {
     pub chunks: Vec<ProjectChunk>,
 }
 
+const BATCH_SIZE: usize = 10;
+
+/// Data produced by parsing a file, before any DB write.
+struct ScannedFileData {
+    relative: String,
+    title: String,
+    kind: String,
+    encoding: String,
+    content_hash: String,
+    word_count: i64,
+    chapters: Vec<ParserChapter>,
+    mtime: Option<String>,
+}
+
+/// Parse a single file — pure function, no DB access. Safe to call in parallel.
+fn parse_scanned_file(root: &Path, file: &Path, enable_chunking: bool) -> Result<ScannedFileData> {
+    let mtime = file_modified_time(file).ok();
+    let parsed = parse_document(file)?;
+    let relative = relative_document_path(root, file);
+    let kind = document_kind(file);
+    let content_hash = sha256_hex(parsed.content.as_bytes());
+    let word_count = count_words(&parsed.content) as i64;
+
+    let chapters = if enable_chunking {
+        parsed.chapters
+    } else {
+        vec![
+            parsed
+                .chapters
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| ParserChapter {
+                    index: 0,
+                    title: parsed.title.clone(),
+                    start_offset: 0,
+                    end_offset: parsed.content.len(),
+                    content: parsed.content.clone(),
+                }),
+        ]
+    };
+
+    Ok(ScannedFileData {
+        relative,
+        title: parsed.title,
+        kind,
+        encoding: parsed.encoding,
+        content_hash,
+        word_count,
+        chapters,
+        mtime,
+    })
+}
+
 impl NovelCore {
     pub fn open(db_path: &Path) -> Result<Self> {
         Self::open_with(db_path, None)
@@ -140,21 +197,110 @@ impl NovelCore {
             .ok()
             .flatten()
             .unwrap_or_default();
+        let user_knowledge_base = db_path.parent().map(|p| p.join("knowledge"));
+
         let core = Self {
             storage,
             profiles_root,
+            user_knowledge_base,
             profile_manifests: manifests,
             extractor_rules: analysis_rules.extractors,
             people_config: analysis_rules.people,
             default_rules,
-            ai_provider: Box::new(novellossless_ai::NoopProvider),
+            ai_provider: Mutex::new(Box::new(novellossless_ai::NoopProvider)),
         };
         core.seed_default_settings().ok();
         Ok(core)
     }
 
+    pub fn profiles_root(&self) -> &Path {
+        &self.profiles_root
+    }
+
+    pub fn load_knowledge_packs(&self) -> Vec<KnowledgePackEntry> {
+        let mut packs = Vec::new();
+        if let Ok(builtin) = KnowledgePackLoader::load_all(&self.profiles_root, "history") {
+            packs.extend(builtin);
+        }
+        if let Some(ref base) = self.user_knowledge_base {
+            let user_dir = base.join("history");
+            if let Ok(user_packs) = KnowledgePackLoader::load_all_from_dir(&user_dir) {
+                packs.extend(user_packs);
+            }
+        }
+        packs
+    }
+
+    /// Reload AI provider from current settings.
+    /// Safe to call at any time — replaces the provider in place.
+    pub fn reload_ai_provider(&self) {
+        let enabled = self
+            .storage
+            .get_setting("ai_enabled")
+            .ok()
+            .flatten()
+            .is_some_and(|v| v == "true");
+        if !enabled {
+            return;
+        }
+        let api_key = keychain::get_api_key().or_else(|| {
+            // Fallback: read from SQLite (pre-keychain migration path)
+            let legacy = self
+                .storage
+                .get_setting("ai_api_key")
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            if !legacy.is_empty() && legacy != "stored-via-keyring" {
+                // Migrate to keychain
+                keychain::store_api_key(&legacy).ok();
+                self.storage
+                    .set_setting("ai_api_key", "stored-via-keyring")
+                    .ok();
+                Some(legacy)
+            } else {
+                None
+            }
+        });
+        let api_key = match api_key {
+            Some(k) if !k.is_empty() => k,
+            _ => return,
+        };
+        let raw_url = self
+            .storage
+            .get_setting("ai_provider")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let api_url = if raw_url.is_empty() || raw_url == "openai" {
+            "https://api.openai.com".to_string()
+        } else {
+            raw_url
+        };
+        let model = self
+            .storage
+            .get_setting("ai_model")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "gpt-4o-mini".to_string());
+        let provider = novellossless_ai::provider::OpenAiProvider::new(api_url, api_key, model);
+        *self.ai_provider.lock().unwrap() = Box::new(provider);
+    }
+
+    /// Test AI provider connection.
+    pub fn test_ai_connection(&self) -> Result<String> {
+        let provider = self.ai_provider.lock().unwrap();
+        use novellossless_ai::AiProvider;
+        let msg = provider.extract_rules(&["Respond with JSON: []"])?;
+        if msg.is_empty() {
+            Ok("AI 未配置（NoopProvider）".to_string())
+        } else {
+            Ok("连接成功".to_string())
+        }
+    }
+
     fn seed_default_settings(&self) -> Result<()> {
-        let defaults: [(&str, &str); 8] = [
+        let defaults: [(&str, &str); 11] = [
             ("language", "zh-CN"),
             ("theme", "dark"),
             ("auto_scan", "true"),
@@ -163,6 +309,9 @@ impl NovelCore {
             ("uploads_enabled", "false"),
             ("backup_enabled", "true"),
             ("backup_path", ""),
+            ("ai_provider", "openai"),
+            ("ai_api_key", "stored-via-keyring"),
+            ("ai_model", "gpt-4o-mini"),
         ];
         for (key, value) in &defaults {
             if self.storage.get_setting(key)?.is_none() {
@@ -183,11 +332,12 @@ impl NovelCore {
         Self {
             storage,
             profiles_root,
+            user_knowledge_base: None,
             profile_manifests: manifests,
             extractor_rules: analysis_rules.extractors,
             people_config: analysis_rules.people,
             default_rules,
-            ai_provider: Box::new(novellossless_ai::NoopProvider),
+            ai_provider: Mutex::new(Box::new(novellossless_ai::NoopProvider)),
         }
     }
 
@@ -201,11 +351,12 @@ impl NovelCore {
         Self {
             storage,
             profiles_root: profiles_root.to_path_buf(),
+            user_knowledge_base: None,
             profile_manifests: manifests,
             extractor_rules: analysis_rules.extractors,
             people_config: analysis_rules.people,
             default_rules,
-            ai_provider: Box::new(novellossless_ai::NoopProvider),
+            ai_provider: Mutex::new(Box::new(novellossless_ai::NoopProvider)),
         }
     }
 
@@ -227,6 +378,10 @@ impl NovelCore {
         self.storage.get_project(project_id)
     }
 
+    pub fn delete_project(&self, project_id: &str) -> Result<()> {
+        self.storage.delete_project(project_id).map_err(Into::into)
+    }
+
     pub fn project_summary(&self, project_id: &str) -> Result<ProjectSummary> {
         self.storage.project_summary(project_id)
     }
@@ -243,7 +398,7 @@ impl NovelCore {
                 .len(),
             item_candidates: self.list_candidates(project_id, Some("item"), 1_000)?.len(),
             foreshadow_candidates: self.list_foreshadows(project_id, 1_000)?.len(),
-            issue_count: self.list_issues(project_id, 1_000)?.len(),
+            issue_count: self.list_issues(project_id, 1_000, None)?.len(),
         })
     }
 
@@ -276,20 +431,41 @@ impl NovelCore {
         let mut scanned_documents = 0;
         let mut skipped_files = 0;
 
-        for (i, file) in files.iter().enumerate() {
-            let relative = relative_document_path(&root, file);
-            progress.report(i + 1, total, &relative);
-            match self.scan_file(&project, &root, file, enable_chunking) {
-                Ok(()) => {
-                    scanned_documents += 1;
-                    let _ = self.storage.record_scan_file(&scan_run.id, &relative);
-                }
-                Err(e) => {
-                    progress.error(&relative, &e.to_string());
-                    skipped_files += 1;
-                    let _ = self
-                        .storage
-                        .record_scan_error(&scan_run.id, &relative, &e.to_string());
+        // Process files in parallel batches: parse in parallel, write sequentially
+        for (batch_index, batch) in files.chunks(BATCH_SIZE).enumerate() {
+            let base = batch_index * BATCH_SIZE;
+            let parsed: Vec<(usize, Result<ScannedFileData, (String, String)>)> = batch
+                .par_iter()
+                .enumerate()
+                .map(|(bi, file)| {
+                    let abs_idx = base + bi;
+                    let result = parse_scanned_file(&root, file, enable_chunking).map_err(|e| {
+                        let rel = relative_document_path(&root, file);
+                        (rel, e.to_string())
+                    });
+                    (abs_idx, result)
+                })
+                .collect();
+
+            for (abs_idx, result) in parsed {
+                match result {
+                    Ok(data) => {
+                        progress.report(abs_idx + 1, total, &data.relative);
+                        if let Err(e) = self.write_scanned_file(&scan_run.id, &project.id, data) {
+                            progress.error(&"unknown", &e.to_string());
+                            skipped_files += 1;
+                        } else {
+                            scanned_documents += 1;
+                        }
+                    }
+                    Err((relative, msg)) => {
+                        progress.report(abs_idx + 1, total, &relative);
+                        progress.error(&relative, &msg);
+                        skipped_files += 1;
+                        let _ = self
+                            .storage
+                            .record_scan_error(&scan_run.id, &relative, &msg);
+                    }
                 }
             }
         }
@@ -361,26 +537,46 @@ impl NovelCore {
         let mut skipped_files = 0;
         let total = files.len();
 
-        for (i, file) in files.iter().enumerate() {
-            let relative = relative_document_path(&root, file);
-            progress.report(i + 1, total, &relative);
+        // Process files in parallel batches
+        for (batch_index, batch) in files.chunks(BATCH_SIZE).enumerate() {
+            let base = batch_index * BATCH_SIZE;
+            let parsed: Vec<(usize, Option<Result<ScannedFileData, String>>)> = batch
+                .par_iter()
+                .enumerate()
+                .map(|(bi, file)| {
+                    let rel = relative_document_path(&root, file);
+                    let abs_idx = base + bi;
+                    if already_scanned.contains(&rel) {
+                        (abs_idx, None)
+                    } else {
+                        let r = parse_scanned_file(&root, file, enable_chunking)
+                            .map_err(|e| e.to_string());
+                        (abs_idx, Some(r))
+                    }
+                })
+                .collect();
 
-            if already_scanned.contains(&relative) {
-                scanned_documents += 1;
-                continue;
-            }
-
-            match self.scan_file(&project, &root, file, enable_chunking) {
-                Ok(()) => {
+            for (abs_idx, maybe_result) in parsed {
+                let rel = relative_document_path(&root, &files[abs_idx]);
+                progress.report(abs_idx + 1, total, &rel);
+                if maybe_result.is_none() {
                     scanned_documents += 1;
-                    let _ = self.storage.record_scan_file(scan_run_id, &relative);
+                    continue;
                 }
-                Err(e) => {
-                    progress.error(&relative, &e.to_string());
-                    skipped_files += 1;
-                    let _ = self
-                        .storage
-                        .record_scan_error(scan_run_id, &relative, &e.to_string());
+                match maybe_result.unwrap() {
+                    Ok(data) => {
+                        if let Err(e) = self.write_scanned_file(scan_run_id, &project.id, data) {
+                            progress.error(&rel, &e.to_string());
+                            skipped_files += 1;
+                        } else {
+                            scanned_documents += 1;
+                        }
+                    }
+                    Err(msg) => {
+                        progress.error(&rel, &msg);
+                        skipped_files += 1;
+                        let _ = self.storage.record_scan_error(scan_run_id, &rel, &msg);
+                    }
                 }
             }
         }
@@ -841,8 +1037,14 @@ impl NovelCore {
         self.storage.list_foreshadow_items(project_id, limit)
     }
 
-    pub fn list_issues(&self, project_id: &str, limit: i64) -> Result<Vec<ContinuityIssue>> {
-        self.storage.list_continuity_issues(project_id, limit)
+    pub fn list_issues(
+        &self,
+        project_id: &str,
+        limit: i64,
+        issue_type_prefix: Option<&str>,
+    ) -> Result<Vec<ContinuityIssue>> {
+        self.storage
+            .list_continuity_issues(project_id, limit, issue_type_prefix)
     }
 
     pub fn list_rules(&self, project_id: &str) -> Result<Vec<novellossless_storage::WorldRule>> {
@@ -855,6 +1057,10 @@ impl NovelCore {
 
     pub fn delete_rule(&self, rule_id: &str) -> Result<()> {
         self.storage.delete_rule(rule_id)
+    }
+
+    pub fn create_task(&self, task: &NewRevisionTask) -> Result<String> {
+        self.storage.create_task(task)
     }
 
     pub fn list_tasks(&self, project_id: &str) -> Result<Vec<RevisionTask>> {
@@ -984,7 +1190,7 @@ impl NovelCore {
         let places = self.list_candidates(project_id, Some("place"), 1_000)?;
         let items = self.list_candidates(project_id, Some("item"), 1_000)?;
         let foreshadows = self.list_foreshadows(project_id, 1_000)?;
-        let issues = self.list_issues(project_id, 1_000)?;
+        let issues = self.list_issues(project_id, 1_000, None)?;
 
         let mut content = String::new();
         content.push_str("# 项目分析报告\n\n");
@@ -1196,9 +1402,17 @@ impl NovelCore {
 
         let mut knowledge = KnowledgePackIndex::default();
         if enabled_ids.contains(&"history".to_string()) {
-            if let Ok(packs) = KnowledgePackLoader::load_all(&self.profiles_root, "history") {
-                knowledge = KnowledgePackLoader::build_index(&packs);
+            let mut packs = Vec::new();
+            if let Ok(builtin) = KnowledgePackLoader::load_all(&self.profiles_root, "history") {
+                packs.extend(builtin);
             }
+            if let Some(ref base) = self.user_knowledge_base {
+                let user_dir = base.join("history");
+                if let Ok(user_packs) = KnowledgePackLoader::load_all_from_dir(&user_dir) {
+                    packs.extend(user_packs);
+                }
+            }
+            knowledge = KnowledgePackLoader::build_index(&packs);
         }
 
         let check_issues = IssueEmitter::emit(&check_defs, &chunk_texts, &knowledge);
@@ -1217,7 +1431,7 @@ impl NovelCore {
 
         self.storage.upsert_continuity_issues(project_id, &issues)?;
 
-        Ok(self.storage.list_continuity_issues(project_id, 100)?)
+        Ok(self.storage.list_continuity_issues(project_id, 100, None)?)
     }
 
     fn scan_file(
@@ -1274,6 +1488,45 @@ impl NovelCore {
             &chunks,
         )?;
 
+        Ok(())
+    }
+
+    /// Write a parsed file's data to the database.
+    fn write_scanned_file(
+        &self,
+        scan_run_id: &str,
+        project_id: &str,
+        data: ScannedFileData,
+    ) -> Result<()> {
+        let chunks = data
+            .chapters
+            .iter()
+            .map(|chapter| NewChunk {
+                chunk_index: chapter.index as i64,
+                title: chapter.title.clone(),
+                start_offset: chapter.start_offset as i64,
+                end_offset: chapter.end_offset as i64,
+                content: chapter.content.clone(),
+                content_hash: sha256_hex(chapter.content.as_bytes()),
+                word_count: count_words(&chapter.content) as i64,
+            })
+            .collect::<Vec<_>>();
+
+        self.storage.upsert_document_with_chunks(
+            project_id,
+            &NewDocument {
+                path: data.relative.clone(),
+                kind: data.kind,
+                title: data.title,
+                chapter_count: chunks.len() as i64,
+                content_hash: data.content_hash,
+                word_count: data.word_count,
+                encoding: data.encoding,
+                last_modified_at: data.mtime,
+            },
+            &chunks,
+        )?;
+        self.storage.record_scan_file(scan_run_id, &data.relative)?;
         Ok(())
     }
 
@@ -1433,7 +1686,7 @@ impl NovelCore {
         }
 
         // Task auto-creation
-        if let Ok(issues) = self.storage.list_continuity_issues(project_id, 100) {
+        if let Ok(issues) = self.storage.list_continuity_issues(project_id, 100, None) {
             if let Ok(foreshadows) = self.storage.list_foreshadow_items(project_id, 100) {
                 let _ = novellossless_tasks::TaskManager::auto_create_from_issues(
                     project_id,
@@ -2074,7 +2327,7 @@ mod tests {
 
         core.scan_project(&project.id)?;
 
-        let issues = core.list_issues(&project.id, 50)?;
+        let issues = core.list_issues(&project.id, 50, None)?;
         let repeated_count = issues
             .iter()
             .filter(|i| i.issue_type.starts_with("repeated_"))
@@ -2519,7 +2772,7 @@ mod tests {
         // "钥匙" + "钟声" might trigger foreshadow detection — just check no crash
 
         // Phase 6: Issues (profile checks)
-        let _issues = core.list_issues(&project.id, 20)?;
+        let _issues = core.list_issues(&project.id, 20, None)?;
         // At minimum, should not crash; might find anachronism or other checks
 
         // Phase 7: Context pack

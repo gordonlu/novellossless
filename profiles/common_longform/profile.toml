@@ -13,10 +13,18 @@ types = ["人物关系", "地点归属"]
 types = ["相遇", "分离", "冲突", "和解"]
 
 [metrics]
-enabled = []
+enabled = [
+  "章节平均字数",
+  "叙事密度",
+  "人物密度",
+  "地名密度",
+]
 
 [checks]
-enabled = []
+enabled = [
+  "角色身份地位冲突",
+  "章节长度异常",
+]
 
 [templates]
 enabled = []

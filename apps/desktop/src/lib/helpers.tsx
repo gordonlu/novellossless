@@ -13,6 +13,15 @@ export function formatError(reason: unknown) {
   return message.startsWith("操作失败") ? message : `操作失败：${message}`;
 }
 
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`操作超时（${ms / 1000} 秒）`)), ms),
+    ),
+  ]);
+}
+
 export function candidateTypeLabel(nodeType: string) {
   if (nodeType === "person") return "人物";
   if (nodeType === "place") return "地点";
