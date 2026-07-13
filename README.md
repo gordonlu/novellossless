@@ -16,7 +16,7 @@ novellossless 不是"替作者写小说"的 AI 工具，而是一个帮助作者
 
 ### 项目与扫描
 - 创建/导入项目（支持单文件、多文件目录）
-- TXT / Markdown 扫描（UTF-8、GBK、GB18030 自动识别）
+- TXT / Markdown / DOCX 扫描（UTF-8、GBK、GB18030 自动识别）
 - 章节识别（第一章、第1章、Chapter 1、楔子 等）
 - 增量扫描 + 文件变更监听（800ms 去抖）
 - 改稿记录与版本 Diff
