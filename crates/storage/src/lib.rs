@@ -1292,6 +1292,56 @@ impl Storage {
         Ok(pack)
     }
 
+    pub fn list_context_packs(&self, project_id: &str) -> Result<Vec<ContextPack>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, title, target, content, format, source_refs_json, created_at
+             FROM context_packs WHERE project_id = ?1 ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![project_id], |row| {
+            Ok(ContextPack {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                title: row.get(2)?,
+                target: row.get(3)?,
+                content: row.get(4)?,
+                format: row.get(5)?,
+                source_refs_json: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    pub fn get_context_pack(&self, id: &str) -> Result<Option<ContextPack>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, title, target, content, format, source_refs_json, created_at
+             FROM context_packs WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], |row| {
+            Ok(ContextPack {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                title: row.get(2)?,
+                target: row.get(3)?,
+                content: row.get(4)?,
+                format: row.get(5)?,
+                source_refs_json: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(pack)) => Ok(Some(pack)),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
+    pub fn delete_context_pack(&self, id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM context_packs WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
     pub fn create_scan_run(&self, run: &NewScanRun) -> Result<ScanRun> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();

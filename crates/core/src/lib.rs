@@ -966,6 +966,116 @@ impl NovelCore {
         )
     }
 
+    pub fn list_context_packs(&self, project_id: &str) -> Result<Vec<ContextPack>> {
+        self.storage.list_context_packs(project_id)
+    }
+
+    pub fn get_context_pack(&self, id: &str) -> Result<Option<ContextPack>> {
+        self.storage.get_context_pack(id)
+    }
+
+    pub fn delete_context_pack(&self, id: &str) -> Result<()> {
+        self.storage.delete_context_pack(id)
+    }
+
+    pub fn generate_markdown_report(&self, project_id: &str) -> Result<ContextPack> {
+        let summary = self.project_summary(project_id)?;
+        let people = self.list_candidates(project_id, Some("person"), 1_000)?;
+        let places = self.list_candidates(project_id, Some("place"), 1_000)?;
+        let items = self.list_candidates(project_id, Some("item"), 1_000)?;
+        let foreshadows = self.list_foreshadows(project_id, 1_000)?;
+        let issues = self.list_issues(project_id, 1_000)?;
+
+        let mut content = String::new();
+        content.push_str("# 项目分析报告\n\n");
+        content.push_str(&format!(
+            "> **总览**：{} 个文档 · {} 个章节 · {} 字\n\n",
+            summary.document_count, summary.chunk_count, summary.total_words
+        ));
+
+        // People
+        content.push_str(&format!("## 人物候选（共 {} 条）\n\n", people.len()));
+        if people.is_empty() {
+            content.push_str("未发现人物候选。\n\n");
+        } else {
+            for p in &people {
+                content.push_str(&format!(
+                    "- **{}**（{} 次）— 置信度 {}% — 状态 {} — {}\n",
+                    p.name, p.occurrence_count, p.confidence, p.status, p.source_path
+                ));
+            }
+            content.push('\n');
+        }
+
+        // Places
+        content.push_str(&format!("## 地点候选（共 {} 条）\n\n", places.len()));
+        if places.is_empty() {
+            content.push_str("未发现地点候选。\n\n");
+        } else {
+            for p in &places {
+                content.push_str(&format!(
+                    "- **{}**（{} 次）— 置信度 {}% — 状态 {} — {}\n",
+                    p.name, p.occurrence_count, p.confidence, p.status, p.source_path
+                ));
+            }
+            content.push('\n');
+        }
+
+        // Items
+        content.push_str(&format!("## 物件候选（共 {} 条）\n\n", items.len()));
+        if items.is_empty() {
+            content.push_str("未发现重要物件。\n\n");
+        } else {
+            for p in &items {
+                content.push_str(&format!(
+                    "- **{}**（{} 次）— 置信度 {}% — 状态 {} — {}\n",
+                    p.name, p.occurrence_count, p.confidence, p.status, p.source_path
+                ));
+            }
+            content.push('\n');
+        }
+
+        // Foreshadows
+        content.push_str(&format!("## 伏笔候选（共 {} 条）\n\n", foreshadows.len()));
+        if foreshadows.is_empty() {
+            content.push_str("未发现伏笔候选。\n\n");
+        } else {
+            for f in &foreshadows {
+                content.push_str(&format!(
+                    "- **{}**（{}）— 风险 {} — 状态 {} — 证据：{}\n",
+                    f.title, f.foreshadow_type, f.risk_level, f.status, f.evidence
+                ));
+            }
+            content.push('\n');
+        }
+
+        // Issues
+        content.push_str(&format!("## 连续性问题（共 {} 条）\n\n", issues.len()));
+        if issues.is_empty() {
+            content.push_str("未发现连续性问题。\n\n");
+        } else {
+            for iss in &issues {
+                content.push_str(&format!(
+                    "- **{}**（{}）— 严重度 {} — {}\n",
+                    iss.title, iss.issue_type, iss.severity, iss.description
+                ));
+            }
+            content.push('\n');
+        }
+
+        let source_refs = serde_json::json!([{
+            "generated_at": "now",
+        }]);
+
+        self.storage.save_context_pack(
+            project_id,
+            "项目分析报告",
+            "report",
+            &content,
+            &serde_json::to_string(&source_refs)?,
+        )
+    }
+
     pub fn get_settings(&self) -> Vec<(String, String)> {
         self.storage.get_all_settings().unwrap_or_default()
     }

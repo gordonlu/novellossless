@@ -135,6 +135,24 @@ struct ContextPackDto {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct TimelineEventDto {
+    id: String,
+    project_id: String,
+    chunk_id: String,
+    chunk_index: i64,
+    document_path: String,
+    title: String,
+    order_index: i64,
+    time_expression: String,
+    estimated_order: Option<i64>,
+    participants_json: String,
+    location: String,
+    is_flashback: bool,
+    confidence: i32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PrivacyStatusDto {
     offline_mode: bool,
     ai_enabled: bool,
@@ -406,6 +424,45 @@ fn build_context_pack(
 }
 
 #[tauri::command]
+fn list_context_packs(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<Vec<ContextPackDto>, String> {
+    let core = open_core(&app)?;
+    core.list_context_packs(&project_id)
+        .map(|v| v.into_iter().map(ContextPackDto::from).collect())
+        .map_err(to_command_error)
+}
+
+#[tauri::command]
+fn get_context_pack(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<Option<ContextPackDto>, String> {
+    let core = open_core(&app)?;
+    core.get_context_pack(&id)
+        .map(|opt| opt.map(ContextPackDto::from))
+        .map_err(to_command_error)
+}
+
+#[tauri::command]
+fn delete_context_pack(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let core = open_core(&app)?;
+    core.delete_context_pack(&id).map_err(to_command_error)
+}
+
+#[tauri::command]
+fn generate_markdown_report(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<ContextPackDto, String> {
+    let core = open_core(&app)?;
+    core.generate_markdown_report(&project_id)
+        .map(ContextPackDto::from)
+        .map_err(to_command_error)
+}
+
+#[tauri::command]
 fn get_project_summary(
     app: tauri::AppHandle,
     project_id: String,
@@ -614,9 +671,10 @@ fn update_task_status(
 fn list_timeline_events(
     app: tauri::AppHandle,
     project_id: String,
-) -> Result<Vec<TimelineEvent>, String> {
+) -> Result<Vec<TimelineEventDto>, String> {
     let core = open_core(&app)?;
     core.list_timeline_events(&project_id)
+        .map(|v| v.into_iter().map(TimelineEventDto::from).collect())
         .map_err(to_command_error)
 }
 
@@ -827,6 +885,10 @@ pub fn run() {
             update_foreshadow_status,
             update_issue_status,
             build_context_pack,
+            list_context_packs,
+            get_context_pack,
+            delete_context_pack,
+            generate_markdown_report,
             get_project_summary,
             get_privacy_status,
             get_available_profiles,
@@ -1049,6 +1111,26 @@ impl From<ContextPack> for ContextPackDto {
             format: pack.format,
             source_refs_json: pack.source_refs_json,
             created_at: pack.created_at,
+        }
+    }
+}
+
+impl From<TimelineEvent> for TimelineEventDto {
+    fn from(e: TimelineEvent) -> Self {
+        Self {
+            id: e.id,
+            project_id: e.project_id,
+            chunk_id: e.chunk_id,
+            chunk_index: e.chunk_index,
+            document_path: e.document_path,
+            title: e.title,
+            order_index: e.order_index,
+            time_expression: e.time_expression,
+            estimated_order: e.estimated_order,
+            participants_json: e.participants_json,
+            location: e.location,
+            is_flashback: e.is_flashback,
+            confidence: e.confidence,
         }
     }
 }

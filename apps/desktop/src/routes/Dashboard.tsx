@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   Archive,
   CheckCircle2,
+  FileDown,
   FolderOpen,
   Network,
   Plus,
@@ -30,7 +31,7 @@ import type {
   ScanReport,
 } from "../tauri";
 
-type BusyState = "idle" | "loading" | "import" | "scan" | "search" | "context";
+type BusyState = "idle" | "loading" | "import" | "scan" | "search" | "context" | "report";
 
 interface DashboardProps {
   projectName: string;
@@ -53,6 +54,7 @@ interface DashboardProps {
   handleImport: () => void;
   handleScan: () => void;
   handleBuildContextPack: (query: string) => void;
+  handleGenerateReport: () => void;
   handleStatus: (kind: "candidate" | "foreshadow" | "issue", id: string, status: string) => void;
 }
 
@@ -78,6 +80,7 @@ export function Dashboard(props: DashboardProps) {
     handleImport,
     handleScan,
     handleBuildContextPack,
+    handleGenerateReport,
     handleStatus,
   } = props;
 
@@ -150,6 +153,15 @@ export function Dashboard(props: DashboardProps) {
             >
               <RefreshCw size={16} />
               {busy === "scan" ? "正在扫描" : "开始扫描"}
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={handleGenerateReport}
+              disabled={!hasRealProject || busy !== "idle"}
+            >
+              <FileDown size={16} />
+              导出报告
             </button>
           </div>
 

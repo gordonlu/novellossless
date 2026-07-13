@@ -19,6 +19,7 @@ import {
   listCandidates,
   listForeshadows,
   listIssues,
+  generateMarkdownReport,
   getAvailableProfiles,
   listProjects,
   NarrativeNode,
@@ -165,7 +166,7 @@ const previewProfiles: ProfileManifest[] = [
   },
 ];
 
-type BusyState = "idle" | "loading" | "import" | "scan" | "search" | "context";
+type BusyState = "idle" | "loading" | "import" | "scan" | "search" | "context" | "report";
 type RuntimeMode = "desktop" | "preview";
 
 export function App() {
@@ -463,6 +464,24 @@ export function App() {
     }
   }
 
+  async function handleGenerateReport() {
+    if (runtimeMode === "preview") {
+      setNotice("演示模式下不支持导出报告。");
+      return;
+    }
+    setBusy("report");
+    setError("");
+    try {
+      const pack = await generateMarkdownReport(selectedProject.id);
+      setContextPack(pack);
+      setNotice(`已生成《${pack.title}》(${pack.content.length} 字)。`);
+    } catch (reason) {
+      setError(formatError(reason));
+    } finally {
+      setBusy("idle");
+    }
+  }
+
   async function handleStatus(kind: "candidate" | "foreshadow" | "issue", id: string, status: string) {
     if (runtimeMode === "preview") {
       applyLocalStatus(kind, id, status);
@@ -621,6 +640,7 @@ export function App() {
                 handleImport={handleImport}
                 handleScan={handleScan}
                 handleBuildContextPack={handleBuildContextPack}
+                handleGenerateReport={handleGenerateReport}
                 handleStatus={handleStatus}
               />
             }
@@ -629,10 +649,10 @@ export function App() {
           <Route path="/search" element={<SearchView projectId={selectedProject.id} />} />
           <Route path="/characters" element={<Characters projectId={selectedProject.id} />} />
           <Route path="/foreshadows" element={<Foreshadows projectId={selectedProject.id} />} />
-          <Route path="/timeline" element={<Timeline />} />
+          <Route path="/timeline" element={<Timeline projectId={selectedProject.id} />} />
           <Route path="/issues" element={<Issues projectId={selectedProject.id} />} />
           <Route path="/history" element={<RevisionHistory projectId={selectedProject.id} />} />
-          <Route path="/context-pack" element={<ContextPackRoute />} />
+          <Route path="/context-pack" element={<ContextPackRoute projectId={selectedProject.id} />} />
           <Route
             path="/privacy"
             element={<Privacy privacy={privacy} />}

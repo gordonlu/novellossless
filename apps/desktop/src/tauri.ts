@@ -237,6 +237,47 @@ export function buildContextPack(projectId: string, query: string, limit = 10) {
   return invoke<ContextPack>("build_context_pack", { projectId, query, limit });
 }
 
+export function listContextPacks(projectId: string) {
+  ensureDesktopRuntime();
+  return invoke<ContextPack[]>("list_context_packs", { projectId });
+}
+
+export function getContextPack(id: string) {
+  ensureDesktopRuntime();
+  return invoke<ContextPack | null>("get_context_pack", { id });
+}
+
+export function deleteContextPack(id: string) {
+  ensureDesktopRuntime();
+  return invoke<void>("delete_context_pack", { id });
+}
+
+export function generateMarkdownReport(projectId: string) {
+  ensureDesktopRuntime();
+  return invoke<ContextPack>("generate_markdown_report", { projectId });
+}
+
+export interface TimelineEvent {
+  id: string;
+  projectId: string;
+  chunkId: string;
+  chunkIndex: number;
+  documentPath: string;
+  title: string;
+  orderIndex: number;
+  timeExpression: string;
+  estimatedOrder: number | null;
+  participantsJson: string;
+  location: string;
+  isFlashback: boolean;
+  confidence: number;
+}
+
+export function listTimelineEvents(projectId: string) {
+  ensureDesktopRuntime();
+  return invoke<TimelineEvent[]>("list_timeline_events", { projectId });
+}
+
 export function getPrivacyStatus() {
   ensureDesktopRuntime();
   return invoke<PrivacyStatus>("get_privacy_status");
